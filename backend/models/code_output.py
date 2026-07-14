@@ -1,5 +1,4 @@
-﻿
-# backend/models/code_output.py
+﻿# backend/models/code_output.py
 import uuid
 from datetime import datetime
 
@@ -28,9 +27,9 @@ class CodeOutput(Base):
     is_test_file: Mapped[bool] = mapped_column(Boolean, default=False)
     is_doc_file: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    annotations: Mapped[list] = mapped_column(JSONB, default=list)  # [{line, agent, note, color}]
+    annotations: Mapped[list] = mapped_column(JSONB, default=list)
 
-    created_at: Mapped[datetime] = mapped_column(func.now())
-    updated_at: Mapped[datetime] = mapped_column(func.now(), onupdate=func.now())
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
 
     task: Mapped["Task"] = relationship(back_populates="code_outputs")

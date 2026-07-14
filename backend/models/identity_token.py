@@ -27,4 +27,4 @@ class IdentityToken(Base):
     issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
-    task: Mapped["Task"] = relationship()
+    task: Mapped["Task"] = relationship(back_populates="identity_tokens")

@@ -55,3 +55,13 @@ class Task(Base):
     agent_runs: Mapped[list["AgentRun"]] = relationship(back_populates="task", cascade="all, delete-orphan")
     log_entries: Mapped[list["LogEntry"]] = relationship(back_populates="task", cascade="all, delete-orphan")
     code_outputs: Mapped[list["CodeOutput"]] = relationship(back_populates="task", cascade="all, delete-orphan")
+
+    # v2 — Governance (C7/C9). One-to-one in practice: Guardrail keeps a single
+    # running score per task, Identity Broker can issue more than one token
+    # over a task's life (e.g. re-issued after a re-plan), hence the list.
+    risk_score: Mapped["SessionRiskScore | None"] = relationship(
+        back_populates="task", cascade="all, delete-orphan", uselist=False
+    )
+    identity_tokens: Mapped[list["IdentityToken"]] = relationship(
+        back_populates="task", cascade="all, delete-orphan"
+    )

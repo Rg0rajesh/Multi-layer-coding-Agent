@@ -1,5 +1,4 @@
-﻿
-# backend/config.py
+﻿# backend/config.py
 from functools import lru_cache
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -14,6 +13,11 @@ class Settings(BaseSettings):
     # local LLM + vector store
     ollama_url: str = "http://localhost:11434"
     chroma_url: str = "http://localhost:8001"
+
+    # Model tags live here, not hardcoded in each agent file — swapping back
+    # to 7B on a stronger machine later is a one-line .env change this way.
+    ollama_model: str = "qwen2.5-coder:3b"
+    llama_guard_model: str = "llama-guard3"
 
     # auth
     jwt_secret_key: str

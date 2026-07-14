@@ -54,14 +54,18 @@ services:
       timeout: 5s
       retries: 5
 
-  # Pulls the model once on first boot instead of relying on a manual step.
+  # Pulls both models once on first boot — 3B tag specifically, since the
+  # bare "qwen2.5-coder" tag defaults to 7B and won't fit on laptop RAM/VRAM.
+  # Llama Guard rides along in the same container; Guardrail (C9) needs it.
   ollama-init:
     image: ollama/ollama:latest
     depends_on:
       ollama:
         condition: service_healthy
     networks: [agentx-net]
-    entrypoint: ["sh", "-c", "OLLAMA_HOST=ollama:11434 ollama pull qwen2.5-coder"]
+    entrypoint: ["sh", "-c",
+      "OLLAMA_HOST=ollama:11434 ollama pull qwen2.5-coder:3b && \
+       OLLAMA_HOST=ollama:11434 ollama pull llama-guard3"]
     restart: "no"
 
   chromadb:
