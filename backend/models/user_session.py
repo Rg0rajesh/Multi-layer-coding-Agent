@@ -1,5 +1,4 @@
-﻿
-# backend/models/user_session.py
+﻿# backend/models/user_session.py
 import uuid
 from datetime import datetime
 
@@ -31,7 +30,7 @@ class AlertRule(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    condition: Mapped[dict] = mapped_column(JSONB, nullable=False)  # {agent, metric, operator, threshold, window_minutes}
-    action: Mapped[dict] = mapped_column(JSONB, nullable=False)     # {type: slack|email, target}
+    condition: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    action: Mapped[dict] = mapped_column(JSONB, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(func.now())
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())

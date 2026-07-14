@@ -1,5 +1,4 @@
-﻿
-# backend/models/agent_run.py
+﻿# backend/models/agent_run.py
 import uuid
 from datetime import datetime
 
@@ -16,7 +15,8 @@ class AgentRun(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     task_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"), index=True)
 
-    agent_name: Mapped[str] = mapped_column(String(50), index=True)  # PLANNER / CODER / TESTER / ...
+    agent_name: Mapped[str] = mapped_column(String(50), index=True)  # includes GUARDRAIL / GROUNDING /
+                                                                       # IDENTITY_BROKER / CONTEXT_CURATOR now
     agent_color: Mapped[str | None] = mapped_column(String(10))
     status: Mapped[str] = mapped_column(String(30), default="pending")
 
@@ -24,8 +24,6 @@ class AgentRun(Base):
     step_current: Mapped[int] = mapped_column(Integer, default=0)
     step_total: Mapped[int] = mapped_column(Integer, default=0)
 
-    # Shape varies per agent — Planner tracks subtasks_created, Coder tracks
-    # lines_written, etc. Kept schemaless on purpose; validated in the service layer.
     stats: Mapped[dict] = mapped_column(JSONB, default=dict)
     input_data: Mapped[dict | None] = mapped_column(JSONB)
     output_data: Mapped[dict | None] = mapped_column(JSONB)

@@ -1,5 +1,4 @@
-﻿
-# backend/models/log_entry.py
+﻿# backend/models/log_entry.py
 import uuid
 from datetime import datetime
 
@@ -18,7 +17,7 @@ class LogEntry(Base):
     agent_run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("agent_runs.id"))
 
     agent_name: Mapped[str] = mapped_column(String(50), index=True)
-    log_level: Mapped[str] = mapped_column(String(20))     # INIT / TASK / EXEC / DONE / WARN / ERROR / PASS
+    log_level: Mapped[str] = mapped_column(String(20))
     prefix_icon: Mapped[str | None] = mapped_column(String(5))
     message: Mapped[str] = mapped_column(Text, nullable=False)
     agent_color: Mapped[str | None] = mapped_column(String(10))

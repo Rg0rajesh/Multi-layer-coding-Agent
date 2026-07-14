@@ -24,9 +24,16 @@ class Project(Base):
     visibility: Mapped[str] = mapped_column(String(20), default="private")  # private / team / public
     git_repo_url: Mapped[str | None] = mapped_column(Text)
 
-    created_at: Mapped[datetime] = mapped_column(func.now())
-    updated_at: Mapped[datetime] = mapped_column(func.now(), onupdate=func.now())
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
 
     owner: Mapped["User"] = relationship(back_populates="projects")
     team: Mapped["Team | None"] = relationship(back_populates="projects")
     tasks: Mapped[list["Task"]] = relationship(back_populates="project")
+
+    # v2 — Context Curator (C6) output. Deliberately not cascade-deleted with
+    # the project's tasks — curated_memory rows can outlive individual tasks;
+    # they only disappear if the whole project is deleted.
+    curated_memory: Mapped[list["CuratedMemory"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )

@@ -1,4 +1,8 @@
 -- database/schema.sql
+-- v2.1: merges the original 8 tables with the 3 governance/memory tables
+-- from migrations/002_governance_and_memory_curation.sql, so a fresh
+-- `docker-compose up` creates all 11 in one pass. The standalone migration
+-- file is kept for teams upgrading an existing v1 database in place.
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- Reused by every table with an updated_at column
@@ -204,3 +208,40 @@ CREATE TABLE alert_rules (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX idx_alert_rules_user ON alert_rules(user_id);
+
+-- ============================================================
+-- v2 additions — Governance (C7/C9) + Memory Curation (C6)
+-- Additive only. Nothing above this line changed for v2.
+-- ============================================================
+
+CREATE TABLE session_risk_scores (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    task_id       UUID NOT NULL UNIQUE REFERENCES tasks(id) ON DELETE CASCADE,
+    running_score NUMERIC(5,2) NOT NULL DEFAULT 0,
+    last_verdict  VARCHAR(20) NOT NULL DEFAULT 'allow',  -- allow / flag / block
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE TRIGGER trg_session_risk_updated_at
+    BEFORE UPDATE ON session_risk_scores
+    FOR EACH ROW EXECUTE FUNCTION touch_updated_at();
+
+CREATE TABLE identity_tokens (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    task_id       UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    scope         JSONB NOT NULL DEFAULT '{}',      -- tools/resources this run may touch
+    tool_call_log JSONB NOT NULL DEFAULT '[]',       -- append-only audit trail
+    issued_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at    TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX idx_identity_tokens_task ON identity_tokens(task_id);
+
+CREATE TABLE curated_memory (
+    id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    project_id     UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    source_task_id UUID REFERENCES tasks(id) ON DELETE SET NULL,  -- outlives the task
+    tag            VARCHAR(30) NOT NULL,   -- architectural_decision / known_bug
+    summary        TEXT NOT NULL,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_curated_memory_project ON curated_memory(project_id);
+CREATE INDEX idx_curated_memory_tag ON curated_memory(tag);

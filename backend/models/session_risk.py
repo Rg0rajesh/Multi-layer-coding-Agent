@@ -13,7 +13,7 @@ class SessionRiskScore(Base):
     """
     Tracks Guardrail's running risk assessment for a task's session.
     One row per task — Guardrail reads this before scoring a new message
-    and writes back after, per the 0.6/0.4 decay formula in the v2 spec.
+    and writes back after, per the 0.6/0.4 decay formula in the master prompt.
     """
     __tablename__ = "session_risk_scores"
 
@@ -25,6 +25,6 @@ class SessionRiskScore(Base):
     running_score: Mapped[float] = mapped_column(Numeric(5, 2), default=0)
     last_verdict: Mapped[str] = mapped_column(String(20), default="allow")  # allow / flag / block
 
-    updated_at: Mapped[datetime] = mapped_column(func.now(), onupdate=func.now())
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
 
-    task: Mapped["Task"] = relationship()
+    task: Mapped["Task"] = relationship(back_populates="risk_score")

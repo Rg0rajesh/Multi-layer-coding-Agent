@@ -1,5 +1,4 @@
-﻿
-# backend/models/team.py
+﻿# backend/models/team.py
 import uuid
 from datetime import datetime
 
@@ -20,7 +19,7 @@ class Team(Base):
     owner_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
     shared_api_key: Mapped[str | None] = mapped_column(String(255))
     default_agent_config: Mapped[dict] = mapped_column(JSONB, default=dict)
-    created_at: Mapped[datetime] = mapped_column(func.now())
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
     members: Mapped[list["TeamMember"]] = relationship(back_populates="team", cascade="all, delete-orphan")
     projects: Mapped[list["Project"]] = relationship(back_populates="team")
@@ -33,8 +32,8 @@ class TeamMember(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     team_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("teams.id", ondelete="CASCADE"), index=True)
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    role: Mapped[str] = mapped_column(String(20), default="viewer")     # owner / admin / editor / viewer
-    status: Mapped[str] = mapped_column(String(20), default="active")   # active / invited / suspended
-    joined_at: Mapped[datetime] = mapped_column(func.now())
+    role: Mapped[str] = mapped_column(String(20), default="viewer")
+    status: Mapped[str] = mapped_column(String(20), default="active")
+    joined_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
     team: Mapped["Team"] = relationship(back_populates="members")

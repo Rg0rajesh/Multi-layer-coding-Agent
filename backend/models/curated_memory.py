@@ -27,6 +27,6 @@ class CuratedMemory(Base):
     tag: Mapped[str] = mapped_column(String(30), index=True)  # architectural_decision / known_bug
     summary: Mapped[str] = mapped_column(Text, nullable=False)
 
-    created_at: Mapped[datetime] = mapped_column(func.now())
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
-    project: Mapped["Project"] = relationship()
+    project: Mapped["Project"] = relationship(back_populates="curated_memory")
