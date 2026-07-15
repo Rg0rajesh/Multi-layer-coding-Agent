@@ -54,9 +54,10 @@ services:
       timeout: 5s
       retries: 5
 
-  # Pulls both models once on first boot — 3B tag specifically, since the
-  # bare "qwen2.5-coder" tag defaults to 7B and won't fit on laptop RAM/VRAM.
-  # Llama Guard rides along in the same container; Guardrail (C9) needs it.
+  # Pulls both models once on first boot. Guardrail uses the 1b tag deliberately —
+  # the bare "llama-guard3" tag defaults to 8b (~4.9GB, needs ~6-7GB RAM to run),
+  # which doesn't leave room for Qwen2.5-Coder + Postgres + Redis + ChromaDB on a
+  # laptop. 1b is ~1.6GB and uses the same safety taxonomy on a smaller backbone.
   ollama-init:
     image: ollama/ollama:latest
     depends_on:
@@ -65,7 +66,7 @@ services:
     networks: [agentx-net]
     entrypoint: ["sh", "-c",
       "OLLAMA_HOST=ollama:11434 ollama pull qwen2.5-coder:3b && \
-       OLLAMA_HOST=ollama:11434 ollama pull llama-guard3"]
+       OLLAMA_HOST=ollama:11434 ollama pull llama-guard3:1b"]
     restart: "no"
 
   chromadb:

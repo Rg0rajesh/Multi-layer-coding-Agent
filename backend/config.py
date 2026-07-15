@@ -17,7 +17,12 @@ class Settings(BaseSettings):
     # Model tags live here, not hardcoded in each agent file — swapping back
     # to 7B on a stronger machine later is a one-line .env change this way.
     ollama_model: str = "qwen2.5-coder:3b"
-    llama_guard_model: str = "llama-guard3"
+
+    # Guardrail (C9) classifier. Defaults to the 1b tag — the 8b variant needs
+    # ~6-7GB RAM on its own, which doesn't leave room for the coder model and
+    # the rest of the stack on a typical laptop. Same taxonomy either way;
+    # bump to "llama-guard3:8b" via .env once you're on beefier hardware.
+    llama_guard_model: str = "llama-guard3:1b"
 
     # auth
     jwt_secret_key: str
