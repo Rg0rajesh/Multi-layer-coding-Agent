@@ -1,15 +1,21 @@
-﻿
-"""
+﻿"""
 Human agent (C3) — the human is a formal node, not just a viewer of the
-final output. Two responsibilities:
+final output. Three responsibilities:
   1. Pause the workflow at the plan-approval checkpoint until someone
      approves, edits, or rejects it.
   2. Let a person inject a brand-new agent role mid-workflow — the part
      no other system in the comparison table supports.
+  3. Hand off both of the above to the API layer (routers/agents.py)
+     without needing to know anything about HTTP.
 
-The actual approve/reject/add-role calls arrive over the API
-(routers/agents.py — not built yet). This module owns the waiting and the
-state transitions; it doesn't know about HTTP.
+Caveat that matters once this stops running as a single process: both
+`_pending` and `_role_queue` below are plain in-memory dicts. That's fine
+while the FastAPI app and the Celery worker share memory (dev, or a
+single combined container), but the moment they're split across separate
+containers — which docker-compose.yml already does — neither approvals
+nor role requests submitted through the API will reach a workflow running
+in the Celery process. Swap both for Redis-backed structures before that
+split matters in practice.
 """
 from __future__ import annotations
 
@@ -33,10 +39,16 @@ class PendingApproval:
     plan: dict
 
 
-# Keyed by task_id, lives in worker memory. Fine for a single Celery worker;
-# swap for a Redis-backed wait before running more than one worker process.
+# Keyed by task_id, lives in worker memory. See module docstring.
 _pending: dict[str, PendingApproval] = {}
 
+# Queued dynamic-role requests, keyed by task_id. See module docstring.
+_role_queue: dict[str, list[dict]] = {}
+
+
+# ---------------------------------------------------------------------------
+# Plan approval
+# ---------------------------------------------------------------------------
 
 async def human_approval_node(state: WorkflowState) -> dict:
     task_id = state["task_id"]
@@ -84,11 +96,32 @@ def submit_decision(task_id: str, decision: Decision, payload: dict | str | None
     return True
 
 
+# ---------------------------------------------------------------------------
+# Dynamic role assignment
+# ---------------------------------------------------------------------------
+
 def add_dynamic_role(state: WorkflowState, role_name: str, role_config: dict) -> dict:
-    """Records a mid-workflow 'add this agent now' request. Doesn't spin the
-    agent up itself — that's the orchestrator's job once the graph is
-    rebuilt — but it's what gives Project Memory a trail of who asked for
-    what and why."""
+    """Applies a role addition directly to workflow state. Used when the
+    orchestrator itself drives the addition (e.g. replaying queued
+    requests between nodes) rather than reading straight off the queue."""
     dynamic_roles = [*state.get("dynamic_roles", []), {"role": role_name, "config": role_config}]
     logger.info("Dynamic role '%s' requested for task %s", role_name, state["task_id"])
     return {"dynamic_roles": dynamic_roles}
+
+
+def queue_dynamic_role(task_id: str, role_name: str, config: dict, reason: str | None) -> None:
+    """Called from the API layer when a human asks for a new agent mid-run.
+    Doesn't touch workflow state directly — the router doesn't have access
+    to a live WorkflowState, only a task_id — so this just parks the
+    request until the orchestrator checks in."""
+    _role_queue.setdefault(task_id, []).append(
+        {"role": role_name, "config": config, "reason": reason}
+    )
+
+
+def drain_dynamic_roles(task_id: str) -> list[dict]:
+    """Orchestrator calls this between nodes to pick up anything queued
+    since the last check, then folds each entry into state via
+    add_dynamic_role(). Empties the queue on read so nothing gets
+    applied twice."""
+    return _role_queue.pop(task_id, [])
