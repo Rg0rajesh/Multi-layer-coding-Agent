@@ -1,5 +1,4 @@
-﻿
-# backend/main.py
+﻿# backend/main.py
 """
 AGENTX API entry point. Owns app wiring only — routers hold the actual
 endpoint logic, services/agents/workflow hold everything else. Keeping
@@ -17,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from config import settings
-from routers import agents, auth, tasks, websocket
+from routers import agents, auth, outputs, tasks, websocket
 from services import llm_service
 from services.task_service import TaskNotFoundError
 
@@ -28,9 +27,16 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Warm the coder model up front so the first real task doesn't eat a
-    # cold-start penalty on top of its own timeout budget.
-    await llm_service.ensure_model_ready(settings.ollama_model)
+    # cold-start penalty on top of its own timeout budget. Best-effort —
+    # if Ollama isn't up yet (e.g. still pulling the model on first boot),
+    # log it and let the app start anyway rather than crash-looping.
+    try:
+        await llm_service.ensure_model_ready(settings.ollama_model)
+    except Exception:
+        logger.warning("Model warm-up failed at startup — will retry on first real request", exc_info=True)
+
     yield
+
     await llm_service.close_client()
 
 
@@ -62,6 +68,7 @@ async def task_not_found_handler(request: Request, exc: TaskNotFoundError) -> JS
 app.include_router(auth.router)
 app.include_router(tasks.router)
 app.include_router(agents.router)
+app.include_router(outputs.router)
 app.include_router(websocket.router)
 
 
