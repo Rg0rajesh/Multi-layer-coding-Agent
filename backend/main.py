@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from config import settings
-from routers import agents, auth, logs, outputs, profile, settings as settings_router, tasks, websocket
+from routers import agents, auth, logs, outputs, tasks, team, websocket
 from services import llm_service
 from services.task_service import TaskNotFoundError
 
@@ -70,8 +70,7 @@ app.include_router(tasks.router)
 app.include_router(agents.router)
 app.include_router(outputs.router)
 app.include_router(logs.router)
-app.include_router(profile.router)
-app.include_router(settings_router.router)
+app.include_router(team.router)
 app.include_router(websocket.router)
 
 
