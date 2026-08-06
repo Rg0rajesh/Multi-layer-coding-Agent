@@ -47,7 +47,11 @@ class WorkflowState(TypedDict, total=False):
     # v2 — Identity Broker (C7). None means no credential was issued
     # (OPA unreachable, or Guardrail blocked before Planner ever ran).
     identity_token: Optional[dict]
-
+   # v2 — Grounding (C8). None until the node has actually run.
+    grounded: Optional[bool]
+    unsupported_claims: Optional[list]
+    
     websocket_channel: str
     metrics: dict
     messages: Annotated[list, operator.add]
+ 
