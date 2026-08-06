@@ -1,9 +1,16 @@
 ﻿# backend/workflow/state.py
 """
 Shared state dict passed between every node in the LangGraph workflow.
-Only the v1 (six-agent) fields are populated here — v2 fields (risk_score,
-grounded, identity_token, curated_items...) get added when those agents
-are built in Steps 18-20, not before.
+
+v1 fields (plan, code_files, test_results, ...) back the original six-agent
+pipeline. The v2 fields below back Guardrail (C9) and Identity Broker (C7),
+the two governance agents built in Step 18. Grounding (C8) and Context
+Curator (C6) fields aren't added yet — those land when those agents are
+built, not before.
+
+Nothing here is wired into workflow/workflow.py yet. That rewiring — adding
+all four new nodes to the graph and updating the conditional routing — is
+Step 25, once every v2 agent exists.
 """
 from __future__ import annotations
 
@@ -31,6 +38,15 @@ class WorkflowState(TypedDict, total=False):
     replan_count: int
     human_interventions: int
     dynamic_roles: list
+
+    # v2 — Guardrail (C9). risk_score is the post-decay session score,
+    # not just this turn's raw classification — see agents/guardrail_agent.py.
+    risk_score: float
+    risk_verdict: str  # "allow" | "flag" | "block"
+
+    # v2 — Identity Broker (C7). None means no credential was issued
+    # (OPA unreachable, or Guardrail blocked before Planner ever ran).
+    identity_token: Optional[dict]
 
     websocket_channel: str
     metrics: dict
