@@ -8,10 +8,11 @@ for business logic.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -34,14 +35,19 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Warm the coder model up front so the first real task doesn't eat a
-    # cold-start penalty on top of its own timeout budget. Best-effort —
-    # if Ollama isn't up yet (e.g. still pulling the model on first boot),
-    # log it and let the app start anyway rather than crash-looping.
-    try:
-        await llm_service.ensure_model_ready(settings.ollama_model)
-    except Exception:
-        logger.warning("Model warm-up failed at startup — will retry on first real request", exc_info=True)
+    # Warm both local models up front so the first real task doesn't eat
+    # a cold-start penalty on top of its own timeout budget. Guardrail
+    # runs before Planner on every task, so it needs to be ready just as
+    # much as the coder model does — firing both warm-ups together instead
+    # of one after another roughly halves this wait on a fresh container.
+    warmups = [
+        llm_service.ensure_model_ready(settings.ollama_model),
+        llm_service.ensure_model_ready(settings.llama_guard_model),
+    ]
+    results = await asyncio.gather(*warmups, return_exceptions=True)
+    for model, result in zip((settings.ollama_model, settings.llama_guard_model), results):
+        if isinstance(result, Exception):
+            logger.warning("Model warm-up failed for %s — will retry on first real request", model)
 
     yield
 
@@ -54,12 +60,13 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Frontend runs on :3000 in dev (see docker-compose.yml); nginx fronts both
-# in front of a real deployment, but CORS still needs to allow the dev
-# server directly for local work.
+# Dev default covers the Vite server (docker-compose.yml). Anything beyond
+# localhost — staging, prod behind nginx.conf — comes from CORS_ORIGINS
+# as a comma-separated env var, so shipping a new domain never needs a
+# code change here.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
