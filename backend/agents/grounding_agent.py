@@ -21,6 +21,7 @@ from sqlalchemy import select
 
 from database import async_session_factory
 from memory.task_memory import get_chroma_client
+from models.agent_run import AgentRun
 from models.code_output import CodeOutput
 from models.curated_memory import CuratedMemory
 from models.task import Task
@@ -52,7 +53,9 @@ async def grounding_node(state: WorkflowState) -> dict:
     if not claims:
         # An empty plan isn't Grounding's problem — Human will see it's
         # empty regardless, no point spending a Chroma round trip on it.
-        return {"grounded": True, "unsupported_claims": []}
+        result = GroundingResult(grounded=True)
+        await _persist_grounding_run(task_id, result)
+        return {"grounded": result.grounded, "unsupported_claims": result.unsupported_claims}
 
     facts = await _read_repo_state(state.get("project_id"))
     result = await _check_grounding(claims, facts)
@@ -65,7 +68,27 @@ async def grounding_node(state: WorkflowState) -> dict:
             f"{len(result.unsupported_claims)} unsupported claim(s) found",
         )
 
+    await _persist_grounding_run(task_id, result)
     return {"grounded": result.grounded, "unsupported_claims": result.unsupported_claims}
+
+
+# ---------------------------------------------------------------------------
+# Persistence — Grounding is deterministic and never wrote anything to the
+# DB before, which meant GET /agents/:id/grounding-report had nothing to
+# read. AgentRun.output_data is the natural home for it: same table Live
+# Monitor already polls for every other agent.
+# ---------------------------------------------------------------------------
+
+async def _persist_grounding_run(task_id: str, result: GroundingResult) -> None:
+    async with async_session_factory() as db:
+        db.add(AgentRun(
+            task_id=task_id,
+            agent_name="GROUNDING",
+            agent_color="#00C896",
+            status="completed",
+            output_data={"grounded": result.grounded, "unsupported_claims": result.unsupported_claims},
+        ))
+        await db.commit()
 
 
 # ---------------------------------------------------------------------------
