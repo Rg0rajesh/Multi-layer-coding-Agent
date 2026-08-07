@@ -23,10 +23,10 @@ AGENT_COLORS = {
     "HUMAN": "#FFFFFF",
     "SYSTEM": "#888888",
     # v2 — Governance + memory-curation agents (Master Prompt v2.1 Part 6)
-    "GUARDRAIL": "#FF6B35",
-    "IDENTITY_BROKER": "#FF3C3C",
-    "GROUNDING": "#888888",
-    "CONTEXT_CURATOR": "#00C896",
+    "GUARDRAIL": "#FF3C3C",        # blocking / adversarial-defense — same red as Security
+    "IDENTITY_BROKER": "#E8FF47",  # governance checkpoint — lime, same family as Planner
+    "GROUNDING": "#00C896",        # verification step — same family as Coder/Tester
+    "CONTEXT_CURATOR": "#888888",  # passive/background — neutral like System
 }
 
 
