@@ -1,10 +1,10 @@
-﻿
-# backend/routers/agents.py
+﻿# backend/routers/agents.py
 """
-HTTP surface for the Human supervisor agent (C3). Everything here is a
-thin wrapper over agents/human_agent.py — this file doesn't know how the
-approval wait or the role queue actually work, just how to translate a
-request into a call and a DB row.
+HTTP surface for the Human supervisor agent (C3) plus the read-only
+governance/memory endpoints (C6/C7/C8/C9) documented in Master Prompt
+Part 3. Everything here is a thin wrapper over the agent modules and their
+tables — this file doesn't know how approval waits, OPA, or curation
+actually work, just how to translate a request into a call and a DB row.
 """
 from __future__ import annotations
 
@@ -19,6 +19,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from agents import human_agent
 from database import get_db
 from models.agent_run import AgentRun
+from models.curated_memory import CuratedMemory
+from models.identity_token import IdentityToken
+from models.session_risk import SessionRiskScore
 from models.task import Task
 from models.user import User
 from services.auth_service import get_current_user
@@ -28,7 +31,10 @@ from services.task_service import TaskNotFoundError, get_task
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
 
 # Core pipeline agents — a human can add new roles, but can't shadow these.
-RESERVED_AGENT_NAMES = {"PLANNER", "CODER", "TESTER", "REVIEWER", "SECURITY", "HUMAN", "SYSTEM"}
+RESERVED_AGENT_NAMES = {
+    "GUARDRAIL", "PLANNER", "GROUNDING", "HUMAN", "IDENTITY_BROKER",
+    "CODER", "TESTER", "SECURITY", "REVIEWER", "CONTEXT_CURATOR", "SYSTEM",
+}
 
 
 # ---------------------------------------------------------------- schemas
@@ -62,6 +68,38 @@ class AddRoleRequest(BaseModel):
     config: dict = Field(default_factory=dict)
 
 
+class RiskScoreOut(BaseModel):
+    running_score: float
+    last_verdict: str
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class GroundingReportOut(BaseModel):
+    grounded: bool
+    unsupported_claims: list
+
+
+class IdentityTokenOut(BaseModel):
+    id: UUID
+    scope: dict
+    tool_call_log: list
+    issued_at: datetime
+    expires_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class CuratedMemoryOut(BaseModel):
+    id: UUID
+    tag: str
+    summary: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 # ------------------------------------------------------------- helpers
 
 async def _get_owned_task(db: AsyncSession, task_id: UUID, user: User) -> Task:
@@ -72,6 +110,7 @@ async def _get_owned_task(db: AsyncSession, task_id: UUID, user: User) -> Task:
 
 
 # ----------------------------------------------------------------- routes
+# Human supervisor (C3)
 
 @router.get("/runs/{task_id}", response_model=list[AgentRunOut])
 async def list_agent_runs(
@@ -173,3 +212,86 @@ async def add_dynamic_role(
     )
 
     return agent_run
+
+
+# ----------------------------------------------------------------- routes
+# Governance + memory read endpoints (C6/C7/C8/C9)
+
+@router.get("/{task_id}/risk-score", response_model=RiskScoreOut)
+async def get_risk_score(
+    task_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Guardrail's current running score for this task's session."""
+    await _get_owned_task(db, task_id, current_user)
+
+    row = (
+        await db.execute(select(SessionRiskScore).where(SessionRiskScore.task_id == task_id))
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Guardrail hasn't scored this task yet")
+    return row
+
+
+@router.get("/{task_id}/grounding-report", response_model=GroundingReportOut)
+async def get_grounding_report(
+    task_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Grounding's pass/fail verdict plus any unsupported claims found in
+    the plan. Read from agent_runs.output_data — Grounding is deterministic
+    and writes there once per run."""
+    await _get_owned_task(db, task_id, current_user)
+
+    run = (
+        await db.execute(
+            select(AgentRun)
+            .where(AgentRun.task_id == task_id, AgentRun.agent_name == "GROUNDING")
+            .order_by(AgentRun.completed_at.desc().nullslast())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if run is None or not run.output_data:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No grounding report for this task yet")
+    return run.output_data
+
+
+@router.get("/{task_id}/identity-token", response_model=IdentityTokenOut)
+async def get_identity_token(
+    task_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Scope + expiry + tool_call_log only — never returns raw secrets,
+    there aren't any to return: the token itself never leaves this table."""
+    await _get_owned_task(db, task_id, current_user)
+
+    token = (
+        await db.execute(
+            select(IdentityToken)
+            .where(IdentityToken.task_id == task_id)
+            .order_by(IdentityToken.issued_at.desc())
+        )
+    ).scalars().first()
+    if token is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No credential issued for this task yet")
+    return token
+
+
+@router.get("/{task_id}/curated-memory", response_model=list[CuratedMemoryOut])
+async def get_curated_memory(
+    task_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Items this specific task run promoted into long-term project
+    memory. Standalone tasks with no project have nothing to promote to,
+    so this returns an empty list rather than a 404 for those."""
+    task = await _get_owned_task(db, task_id, current_user)
+    if task.project_id is None:
+        return []
+
+    result = await db.execute(select(CuratedMemory).where(CuratedMemory.source_task_id == task_id))
+    return result.scalars().all()
