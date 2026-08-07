@@ -1,7 +1,8 @@
 ﻿#backend/routers/tasks.py
 """Task CRUD + listing. Auth, execution triggers, and agent wiring live
 elsewhere — this router is deliberately just the REST surface over
-services/task_service.py.
+services/task_service.py, plus the one line that actually kicks a
+created task off to Celery.
 """
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from celery_worker import run_workflow_task
 from database import get_db
 from models.user import User
 from services.auth_service import get_current_user
@@ -103,7 +105,14 @@ async def create_task_endpoint(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return await create_task(db, user_id=current_user.id, data=payload.model_dump())
+    task = await create_task(db, user_id=current_user.id, data=payload.model_dump())
+
+    # Hand off to Celery right after the row lands — the task stays
+    # "pending" until a worker picks it up, but at least it's queued
+    # instead of sitting there forever waiting on nothing.
+    run_workflow_task.delay(str(task.id))
+
+    return task
 
 
 @router.get("", response_model=TaskListOut)
