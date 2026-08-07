@@ -1,130 +1,191 @@
-﻿
-# backend/workflow/workflow.py
+﻿# backend/workflow/workflow.py
 """
-Entry point celery_worker.py calls into. Loads the task, builds the graph
-that matches its coordination_pattern, runs it, and writes the results
-back to Postgres. The graph builders themselves (sequential / parallel /
-event_driven) live in workflow/patterns/ — this file's only job is wiring
-a DB row to a LangGraph run and back.
+Builds and runs the full 10-node AGENTX pipeline (v2.1):
 
-v2 note: this still runs the original 6-node pipeline (Planner -> Human ->
-Coder -> Tester -> Security -> Reviewer). Wiring in Guardrail, Grounding,
-Identity Broker and Context Curator is Step 25 in the build plan —
-deliberately deferred until all four of those agents have been exercised
-on their own first.
+  Guardrail -> Planner -> Grounding -> Human -> Identity Broker
+    -> Coder -> Tester -> Security -> Reviewer -> Context Curator
+
+Every node function already existed in agents/*.py — this file's only job
+is wiring them into one compiled StateGraph and knowing how to turn a
+task_id into an initial state, and a finished state back into rows in
+Postgres. This is what celery_worker.py imports at call time
+(`from workflow.workflow import run_task_workflow`) — before this file
+existed, every task submission would fail the moment a worker picked it
+up.
 """
 from __future__ import annotations
 
 import logging
-from typing import Callable
 
+from langgraph.graph import END, StateGraph
+from sqlalchemy import select
+
+from agents.coder_agent import coder_node
+from agents.context_curator import context_curator_node
+from agents.grounding_agent import grounding_node
+from agents.guardrail_agent import guardrail_node
+from agents.human_agent import human_approval_node
+from agents.identity_broker import identity_broker_node
+from agents.planner_agent import planner_node
+from agents.reviewer_agent import reviewer_node
+from agents.security_agent import security_node
+from agents.tester_agent import tester_node
 from database import async_session_factory
 from memory.memory_manager import MemoryManager
 from models.code_output import CodeOutput
 from models.task import Task
-from workflow.patterns import build_event_driven_graph, build_parallel_graph, build_sequential_graph
+from workflow.routing import route_after_human, route_after_security, route_after_tester
 from workflow.state import WorkflowState
 
 logger = logging.getLogger(__name__)
 
-GRAPH_BUILDERS: dict[str, Callable] = {
-    "sequential": build_sequential_graph,
-    "parallel": build_parallel_graph,
-    "event_driven": build_event_driven_graph,
-}
+MAX_REPLANS = 3
+MAX_CODER_RETRIES = 3
 
 
-class TransientWorkflowError(Exception):
-    """Mirrors celery_worker.TransientWorkflowError so its `except` clause
-    still catches failures from here. Kept as a separate class rather than
-    importing celery_worker's — that file imports this one, so importing
-    back the other way would be circular."""
+# ---------------------------------------------------------------------------
+# Routing — reuses the v1 rules from workflow/routing.py where the decision
+# is identical, only remaps where v2 inserts a new node in between.
+# ---------------------------------------------------------------------------
+
+def _route_after_guardrail(state: WorkflowState) -> str:
+    return END if state.get("risk_verdict") == "block" else "planner"
 
 
-async def run_task_workflow(task_id: str) -> dict:
+def _route_after_human_v2(state: WorkflowState) -> str:
+    # Same approve/reject/replan decision as v1 — an approved plan just
+    # needs a scoped credential (Identity Broker) before Coder can run.
+    decision = route_after_human(state, max_replans=MAX_REPLANS)
+    return "identity_broker" if decision == "coder" else decision
+
+
+def _route_after_tester(state: WorkflowState) -> str:
+    return route_after_tester(state, max_coder_retries=MAX_CODER_RETRIES)
+
+
+def _route_after_security(state: WorkflowState) -> str:
+    return route_after_security(state, max_coder_retries=MAX_CODER_RETRIES)
+
+
+def build_agentx_graph():
+    graph = StateGraph(WorkflowState)
+
+    graph.add_node("guardrail", guardrail_node)
+    graph.add_node("planner", planner_node)
+    graph.add_node("grounding", grounding_node)
+    graph.add_node("human_approval", human_approval_node)
+    graph.add_node("identity_broker", identity_broker_node)
+    graph.add_node("coder", coder_node)
+    graph.add_node("tester", tester_node)
+    graph.add_node("security", security_node)
+    graph.add_node("reviewer", reviewer_node)
+    graph.add_node("context_curator", context_curator_node)
+
+    graph.set_entry_point("guardrail")
+    graph.add_conditional_edges("guardrail", _route_after_guardrail, {"planner": "planner", END: END})
+
+    graph.add_edge("planner", "grounding")
+
+    # Ungrounded plans still go to a human rather than auto-replanning —
+    # a person should see the unsupported_claims flag and decide (see
+    # grounding_agent.py's docstring for the reasoning).
+    graph.add_edge("grounding", "human_approval")
+
+    graph.add_conditional_edges(
+        "human_approval", _route_after_human_v2,
+        {"identity_broker": "identity_broker", "planner": "planner", END: END},
+    )
+    graph.add_edge("identity_broker", "coder")
+    graph.add_edge("coder", "tester")
+
+    graph.add_conditional_edges(
+        "tester", _route_after_tester, {"security": "security", "coder": "coder", END: END},
+    )
+    graph.add_conditional_edges(
+        "security", _route_after_security, {"reviewer": "reviewer", "coder": "coder", END: END},
+    )
+    graph.add_edge("reviewer", "context_curator")
+    graph.add_edge("context_curator", END)
+
+    return graph.compile()
+
+
+# Compiled once per worker process, not once per task — building the graph
+# is cheap but there's no reason to redo it on every single job.
+_compiled_graph = None
+
+
+def _get_graph():
+    global _compiled_graph
+    if _compiled_graph is None:
+        _compiled_graph = build_agentx_graph()
+    return _compiled_graph
+
+
+# ---------------------------------------------------------------------------
+# task_id  <->  WorkflowState
+# ---------------------------------------------------------------------------
+
+async def _load_initial_state(task_id: str) -> tuple[WorkflowState, Task]:
     async with async_session_factory() as db:
         task = await db.get(Task, task_id)
         if task is None:
-            raise ValueError(f"Task {task_id} not found — was it deleted before the worker picked it up?")
-        initial_state = _build_initial_state(task)
+            raise ValueError(f"Task {task_id} not found")
 
-    graph = _get_graph(task.coordination_pattern)
-
-    try:
-        final_state = await graph.ainvoke(initial_state)
-    except Exception as exc:  # noqa: BLE001 — let celery_worker decide retry vs. hard fail
-        logger.exception("Workflow run failed for task %s", task_id)
-        raise TransientWorkflowError(str(exc)) from exc
-
-    await _persist_results(task_id, final_state)
-    await _finalize_memory(task)
-
-    return {
-        "task_id": task_id,
-        "plan_approved": final_state.get("plan_approved", False),
-        "tests_passed": final_state.get("tests_passed", False),
-        "safety_passed": final_state.get("safety_passed", False),
-        "review_score": (final_state.get("review_output") or {}).get("score"),
-    }
+        state: WorkflowState = {
+            "task_id": str(task.id),
+            "task_description": task.description or task.title,
+            "language": task.language or "python",
+            "project_id": str(task.project_id) if task.project_id else None,
+            "user_id": str(task.user_id),
+            "code_files": {},
+            "plan_approved": False,
+            "coder_retries": 0,
+            "replan_count": 0,
+            "human_interventions": 0,
+            "messages": [],
+        }
+        return state, task
 
 
-def _get_graph(pattern: str):
-    builder = GRAPH_BUILDERS.get(pattern)
-    if builder is None:
-        logger.warning("Unknown coordination_pattern %r on this task, falling back to sequential", pattern)
-        builder = build_sequential_graph
-    return builder()
-
-
-def _build_initial_state(task: Task) -> WorkflowState:
-    return {
-        "task_id": str(task.id),
-        "task_description": task.description or task.title,
-        "language": task.language or "python",
-        "project_id": str(task.project_id) if task.project_id else None,
-        "user_id": str(task.user_id),
-        "code_files": {},
-        "plan_approved": False,
-        "safety_passed": False,
-        "tests_passed": False,
-        "coder_retries": 0,
-        "replan_count": 0,
-        "human_interventions": 0,
-        "messages": [],
-    }
-
-
-async def _persist_results(task_id: str, state: dict) -> None:
-    """Writes whatever the graph produced back onto the task row and into
-    code_outputs. Deliberately tolerant — if the run bailed early (e.g. hit
-    max re-plans before Coder ever touched a file), we still save what
-    exists instead of failing the whole update over a missing key."""
-    code_files: dict[str, str] = state.get("code_files", {})
-    test_results = state.get("test_results") or {}
-    safety_report = state.get("safety_report") or {}
-    review_output = state.get("review_output") or {}
-
+async def _persist_final_state(task_id: str, final_state: dict) -> None:
+    """Folds whatever the graph ended up with back into the tasks row —
+    without this, evaluation/metrics.py has nothing but zeros to read —
+    and writes out code_outputs so the Code Output page has something to
+    show once a run finishes."""
     async with async_session_factory() as db:
         task = await db.get(Task, task_id)
         if task is None:
-            return  # task got deleted mid-run — nothing left to update
+            return
 
-        task.replan_count = state.get("replan_count", task.replan_count)
-        task.coder_retries = state.get("coder_retries", task.coder_retries)
-        task.human_interventions = state.get("human_interventions", task.human_interventions)
+        test_results = final_state.get("test_results") or {}
+        review = final_state.get("review_output") or {}
+        safety = final_state.get("safety_report") or {}
+        code_files = final_state.get("code_files") or {}
+
+        task.coder_retries = final_state.get("coder_retries", task.coder_retries)
+        task.replan_count = final_state.get("replan_count", task.replan_count)
+        task.human_interventions = final_state.get("human_interventions", task.human_interventions)
+        task.safety_issues_found = len(safety.get("findings", []))
         task.test_count = test_results.get("total", task.test_count)
         task.tests_passed = test_results.get("passed", task.tests_passed)
-        task.safety_issues_found = len(safety_report.get("findings", []))
         task.total_lines_written = sum(content.count("\n") + 1 for content in code_files.values())
-        if "score" in review_output:
-            task.review_score = review_output["score"]
+        if review.get("score") is not None:
+            task.review_score = review["score"]
 
+        # Don't duplicate rows on a re-run of the same task_id.
+        already_written = {
+            row[0] for row in (
+                await db.execute(select(CodeOutput.file_path).where(CodeOutput.task_id == task_id))
+            ).all()
+        }
         for file_path, content in code_files.items():
+            if file_path in already_written:
+                continue
             db.add(CodeOutput(
                 task_id=task_id,
                 file_path=file_path,
                 file_name=file_path.rsplit("/", 1)[-1],
-                file_type=file_path.rsplit(".", 1)[-1] if "." in file_path else None,
                 content=content,
                 language=task.language,
                 line_count=content.count("\n") + 1,
@@ -134,11 +195,26 @@ async def _persist_results(task_id: str, state: dict) -> None:
         await db.commit()
 
 
-async def _finalize_memory(task: Task) -> None:
-    """Wipes Tier 1 (task-scoped) memory now that the run is over. Tiers
-    2/3 are untouched — this only clears what's disposable."""
-    memory = MemoryManager(
-        str(task.id), str(task.user_id),
-        project_id=str(task.project_id) if task.project_id else None,
-    )
-    await memory.finalize_task()
+async def run_task_workflow(task_id: str) -> dict:
+    """Entry point celery_worker.py calls. Runs the whole pipeline for one
+    task, writes the result back to Postgres, and clears Tier-1 memory now
+    that the task is finished."""
+    state, task = await _load_initial_state(task_id)
+    graph = _get_graph()
+
+    final_state = await graph.ainvoke(state)
+    await _persist_final_state(task_id, final_state)
+
+    if task.project_id:
+        memory = MemoryManager(task_id=task_id, user_id=str(task.user_id), project_id=str(task.project_id))
+        await memory.finalize_task()
+
+    return {
+        "task_id": task_id,
+        "risk_verdict": final_state.get("risk_verdict"),
+        "plan_approved": final_state.get("plan_approved"),
+        "tests_passed": final_state.get("tests_passed"),
+        "safety_passed": final_state.get("safety_passed"),
+        "review_score": (final_state.get("review_output") or {}).get("score"),
+        "curated_items": len(final_state.get("curated_items", [])),
+    }
