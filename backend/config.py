@@ -24,6 +24,17 @@ class Settings(BaseSettings):
     # bump to "llama-guard3:8b" via .env once you're on beefier hardware.
     llama_guard_model: str = "llama-guard3:1b"
 
+    # How long we'll wait on a single Ollama /api/chat call before giving up,
+    # and how many of those calls can be in flight at once. Ollama serializes
+    # requests against one loaded model anyway, so this semaphore mostly
+    # exists to keep a burst of Celery workers from all queuing up at once
+    # and each hitting their own timeout simultaneously.
+    ollama_timeout_seconds: float = 120.0
+    ollama_max_concurrent_requests: int = 2
+
+    # governance (C7) — Identity Broker's policy engine
+    opa_url: str = "http://localhost:8181"
+
     # auth
     jwt_secret_key: str
     jwt_algorithm: str = "HS256"
@@ -39,6 +50,11 @@ class Settings(BaseSettings):
     # notifications (optional in dev)
     sendgrid_api_key: str | None = None
     slack_webhook_url: str | None = None
+
+    # CORS — comma-separated in .env, e.g.
+    # "https://app.agentx.dev,https://staging.agentx.dev"
+    # pydantic-settings parses a comma-separated string straight into a list.
+    cors_origins: list[str] = ["http://localhost:3000"]
 
 
 @lru_cache
