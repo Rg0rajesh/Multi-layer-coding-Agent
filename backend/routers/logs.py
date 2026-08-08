@@ -1,5 +1,4 @@
-﻿
-# backend/routers/logs.py
+﻿# backend/routers/logs.py
 """
 Backs the Dashboard log stream, Error Logs page, and Settings > alert rules.
 Log entries are scoped through a task (and therefore through the task's
@@ -8,7 +7,7 @@ tied to any one run.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -179,7 +178,9 @@ async def resolve_log(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Log entry not found")
 
     entry.is_resolved = True
-    entry.resolved_at = datetime.utcnow()
+    # timezone-aware, matching every other timestamp column in the app —
+    # datetime.utcnow() is naive and deprecated as of Python 3.12
+    entry.resolved_at = datetime.now(timezone.utc)
     entry.resolved_by = current_user.id
     await db.commit()
     await db.refresh(entry)
