@@ -1,5 +1,7 @@
 ﻿# backend/config.py
 from functools import lru_cache
+
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -52,9 +54,21 @@ class Settings(BaseSettings):
     slack_webhook_url: str | None = None
 
     # CORS — comma-separated in .env, e.g.
-    # "https://app.agentx.dev,https://staging.agentx.dev"
-    # pydantic-settings parses a comma-separated string straight into a list.
+    # CORS_ORIGINS=https://app.agentx.dev,https://staging.agentx.dev
     cors_origins: list[str] = ["http://localhost:3000"]
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _split_comma_separated(cls, value):
+        """
+        pydantic-settings v2 expects JSON array syntax for list-typed env
+        vars by default (CORS_ORIGINS='["a","b"]'), which nobody actually
+        writes in a .env file. This makes the plain comma-separated form
+        work instead of failing settings validation at app startup.
+        """
+        if isinstance(value, str):
+            return [origin.strip() for origin in value.split(",") if origin.strip()]
+        return value
 
 
 @lru_cache
