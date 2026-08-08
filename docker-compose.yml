@@ -10,6 +10,7 @@ volumes:
   redis_data:
   ollama_data:
   chroma_data:
+  opa_data:
 
 services:
   postgres:
@@ -54,14 +55,6 @@ services:
       timeout: 5s
       retries: 5
 
-  # Pulls all three models once on first boot. Guardrail uses the 1b tag
-  # deliberately — the bare "llama-guard3" tag defaults to 8b (~4.9GB,
-  # needs ~6-7GB RAM to run), which doesn't leave room for Qwen2.5-Coder +
-  # Postgres + Redis + ChromaDB on a laptop. 1b is ~1.6GB and uses the
-  # same safety taxonomy on a smaller backbone. nomic-embed-text is small
-  # (~275MB) and is required by Mem0's embedder config in
-  # memory/developer_memory.py — without it, Tier 3 memory fails at
-  # runtime the first time anyone's profile gets written or read.
   ollama-init:
     image: ollama/ollama:latest
     depends_on:
@@ -86,6 +79,26 @@ services:
       timeout: 5s
       retries: 5
 
+  # Identity Broker (C7) evaluates every scoped-credential request against
+  # this. Runs the bundled Rego policy directly off disk — no bundle
+  # server needed at this scale, just point it at the folder and it
+  # hot-reloads on file change (handy in dev, harmless in prod since the
+  # policy file doesn't change after build).
+  opa:
+    image: openpolicyagent/opa:latest-envoy
+    restart: unless-stopped
+    command: ["run", "--server", "--addr=0.0.0.0:8181", "/policies"]
+    volumes:
+      - ./backend/governance/policies:/policies:ro
+      - opa_data:/opa-data
+    ports: ["8181:8181"]
+    networks: [agentx-net]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:8181/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   backend:
     build:
       context: ./backend
@@ -97,6 +110,7 @@ services:
       REDIS_URL: redis://redis:6379
       OLLAMA_URL: http://ollama:11434
       CHROMA_URL: http://chromadb:8000
+      OPA_URL: http://opa:8181
     ports: ["8000:8000"]
     networks: [agentx-net]
     depends_on:
@@ -104,6 +118,7 @@ services:
       redis: { condition: service_healthy }
       ollama: { condition: service_healthy }
       chromadb: { condition: service_healthy }
+      opa: { condition: service_healthy }
 
   celery:
     build:
@@ -116,11 +131,14 @@ services:
       DATABASE_URL: postgresql://agentx:${POSTGRES_PASSWORD}@postgres/agentx_db
       REDIS_URL: redis://redis:6379
       OLLAMA_URL: http://ollama:11434
+      CHROMA_URL: http://chromadb:8000
+      OPA_URL: http://opa:8181
     networks: [agentx-net]
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
       ollama: { condition: service_healthy }
+      opa: { condition: service_healthy }
 
   frontend:
     build:
