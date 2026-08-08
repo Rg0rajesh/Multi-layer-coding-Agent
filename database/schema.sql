@@ -1,8 +1,9 @@
 ﻿-- database/schema.sql
 -- v2.1: merges the original 8 tables with the 3 governance/memory tables
 -- from migrations/002_governance_and_memory_curation.sql, so a fresh
--- `docker-compose up` creates all 11 in one pass. The standalone migration
--- file is kept for teams upgrading an existing v1 database in place.
+-- `docker-compose up` creates all 11 in one pass. coordination_pattern
+-- (unused — see migrations/003_drop_coordination_pattern.sql) is dropped
+-- from the tasks table below for fresh installs.
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- Reused by every table with an updated_at column
@@ -93,7 +94,6 @@ CREATE TABLE tasks (
     project_type         VARCHAR(50),
     priority             VARCHAR(20) DEFAULT 'medium',
     status               VARCHAR(30) DEFAULT 'pending',
-    coordination_pattern VARCHAR(30) DEFAULT 'sequential',
     max_exec_minutes     INTEGER DEFAULT 10,
     output_format        VARCHAR(30) DEFAULT 'commented',
     git_integration      BOOLEAN DEFAULT false,
@@ -211,7 +211,6 @@ CREATE INDEX idx_alert_rules_user ON alert_rules(user_id);
 
 -- ============================================================
 -- v2 additions — Governance (C7/C9) + Memory Curation (C6)
--- Additive only. Nothing above this line changed for v2.
 -- ============================================================
 
 CREATE TABLE session_risk_scores (

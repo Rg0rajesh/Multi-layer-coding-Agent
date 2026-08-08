@@ -23,7 +23,9 @@ class Task(Base):
     project_type: Mapped[str | None] = mapped_column(String(50))
     priority: Mapped[str] = mapped_column(String(20), default="medium")
     status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
-    coordination_pattern: Mapped[str] = mapped_column(String(30), default="sequential")
+    # coordination_pattern column removed — see migration 003. Only one
+    # workflow graph (workflow/workflow.py::build_agentx_graph) ever ran,
+    # so the field was a UI choice that did nothing on the backend.
 
     max_exec_minutes: Mapped[int] = mapped_column(Integer, default=10)
     output_format: Mapped[str] = mapped_column(String(30), default="commented")

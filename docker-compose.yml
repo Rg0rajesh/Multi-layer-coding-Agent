@@ -55,6 +55,14 @@ services:
       timeout: 5s
       retries: 5
 
+  # Pulls all three models once on first boot. Guardrail uses the 1b tag
+  # deliberately — the bare "llama-guard3" tag defaults to 8b (~4.9GB,
+  # needs ~6-7GB RAM to run), which doesn't leave room for Qwen2.5-Coder +
+  # Postgres + Redis + ChromaDB on a laptop. 1b is ~1.6GB and uses the
+  # same safety taxonomy on a smaller backbone. nomic-embed-text is small
+  # (~275MB) and is required by Mem0's embedder config in
+  # memory/developer_memory.py — without it, Tier 3 memory fails at
+  # runtime the first time anyone's profile gets written or read.
   ollama-init:
     image: ollama/ollama:latest
     depends_on:
@@ -81,9 +89,7 @@ services:
 
   # Identity Broker (C7) evaluates every scoped-credential request against
   # this. Runs the bundled Rego policy directly off disk — no bundle
-  # server needed at this scale, just point it at the folder and it
-  # hot-reloads on file change (handy in dev, harmless in prod since the
-  # policy file doesn't change after build).
+  # server needed at this scale, just point it at the folder.
   opa:
     image: openpolicyagent/opa:latest-envoy
     restart: unless-stopped
