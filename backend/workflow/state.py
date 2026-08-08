@@ -1,16 +1,15 @@
 ﻿# backend/workflow/state.py
 """
 Shared state dict passed between every node in the LangGraph workflow.
+Backs the full 10-node v2.1 pipeline:
 
-v1 fields (plan, code_files, test_results, ...) back the original six-agent
-pipeline. The v2 fields below back Guardrail (C9) and Identity Broker (C7),
-the two governance agents built in Step 18. Grounding (C8) and Context
-Curator (C6) fields aren't added yet — those land when those agents are
-built, not before.
+  Guardrail -> Planner -> Grounding -> Human -> Identity Broker
+    -> Coder -> Tester -> Security -> Reviewer -> Context Curator
 
-Nothing here is wired into workflow/workflow.py yet. That rewiring — adding
-all four new nodes to the graph and updating the conditional routing — is
-Step 25, once every v2 agent exists.
+Every field a node reads or writes needs to be declared here — TypedDict
+isn't enforced at runtime, so a missing field won't crash anything, but it
+does mean static type checkers (and the next person reading this file)
+have an incomplete picture of what actually flows through the graph.
 """
 from __future__ import annotations
 
@@ -39,19 +38,23 @@ class WorkflowState(TypedDict, total=False):
     human_interventions: int
     dynamic_roles: list
 
-    # v2 — Guardrail (C9). risk_score is the post-decay session score,
-    # not just this turn's raw classification — see agents/guardrail_agent.py.
+    # Guardrail (C9). risk_score is the post-decay session score, not just
+    # this turn's raw classification — see agents/guardrail_agent.py.
     risk_score: float
     risk_verdict: str  # "allow" | "flag" | "block"
 
-    # v2 — Identity Broker (C7). None means no credential was issued
-    # (OPA unreachable, or Guardrail blocked before Planner ever ran).
+    # Identity Broker (C7). None means no credential was issued (OPA
+    # unreachable, or Guardrail blocked before Planner ever ran).
     identity_token: Optional[dict]
-   # v2 — Grounding (C8). None until the node has actually run.
+
+    # Grounding (C8).
     grounded: Optional[bool]
     unsupported_claims: Optional[list]
-    
+
+    # Context Curator (C6). Written by context_curator_node, read back in
+    # workflow.py's run_task_workflow() for the run summary.
+    curated_items: Optional[list]
+
     websocket_channel: str
     metrics: dict
     messages: Annotated[list, operator.add]
- 
