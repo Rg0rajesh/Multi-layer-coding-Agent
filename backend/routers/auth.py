@@ -11,6 +11,7 @@ from pydantic import BaseModel, EmailStr
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from config import settings
 from database import get_db
 from models.user import User
 from services import auth_service
@@ -57,9 +58,9 @@ def _set_refresh_cookie(response: Response, token: str) -> None:
         REFRESH_COOKIE,
         token,
         httponly=True,
-        secure=True,
+        secure=settings.cookie_secure,
         samesite="lax",
-        max_age=60 * 60 * 24 * 30,  # 30 days — keep in sync with settings.refresh_token_expire_days
+        max_age=60 * 60 * 24 * settings.refresh_token_expire_days,
         path="/api/v1/auth",
     )
 

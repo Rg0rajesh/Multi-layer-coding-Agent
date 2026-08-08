@@ -43,6 +43,15 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 30
 
+    # Refresh-token cookie's Secure flag. Defaults to True (browsers won't
+    # set or send it over plain HTTP) because that's the right default for
+    # anything with a real hostname. nginx.conf as shipped only listens on
+    # :80 with no TLS termination configured — set this to false in .env
+    # for local/plain-HTTP deployments, or terminate TLS at nginx and leave
+    # it on for anything that isn't just localhost (which browsers already
+    # treat as a secure context regardless of this flag).
+    cookie_secure: bool = True
+
     # oauth
     github_client_id: str | None = None
     github_client_secret: str | None = None

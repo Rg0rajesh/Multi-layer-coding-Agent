@@ -14,6 +14,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 import httpx
+from sqlalchemy import select
 
 from config import settings
 from database import async_session_factory
@@ -89,6 +90,59 @@ async def opa_issue_token(task_id: str, needed_scope: dict) -> IdentityToken:
         await db.refresh(token)
 
     return token
+
+
+async def log_tool_call(task_id: str, tool: str, *, target: str | None = None) -> bool:
+    """
+    Appends one entry to the task's active token's tool_call_log — this is
+    what Coder/Tester are supposed to call every time they actually do
+    something under the credential Identity Broker issued them.
+
+    Without this, tool_call_log stays permanently empty and
+    evaluation.metrics._scope_violations() has nothing to count, which
+    means the C7 metric always reports zero regardless of what actually
+    happened. Returns whether the call was in-scope, so callers can decide
+    whether to act on it or just log the attempt.
+
+    A missing token (OPA was unreachable, or this ran before Identity
+    Broker existed in an older task) isn't fatal here — nothing to log
+    against, so we just say "allowed" and let the caller proceed. Identity
+    Broker already fails loudly on its own if OPA is down; this function's
+    job is bookkeeping, not re-litigating that decision.
+    """
+    async with async_session_factory() as db:
+        token = (
+            await db.execute(
+                select(IdentityToken)
+                .where(IdentityToken.task_id == task_id)
+                .order_by(IdentityToken.issued_at.desc())
+            )
+        ).scalars().first()
+
+        if token is None:
+            return True
+
+        allowed_tools = set(token.scope.get("tools", []))
+        in_scope = tool in allowed_tools
+
+        token.tool_call_log = [
+            *token.tool_call_log,
+            {
+                "tool": tool,
+                "target": target,
+                "in_scope": in_scope,
+                "at": datetime.now(timezone.utc).isoformat(),
+            },
+        ]
+        await db.commit()
+
+        if not in_scope:
+            logger.warning(
+                "Tool call outside granted scope — task %s tried %r (target=%r), token only grants %s",
+                task_id, tool, target, sorted(allowed_tools),
+            )
+
+        return in_scope
 
 
 def derive_scope(plan: dict) -> dict:

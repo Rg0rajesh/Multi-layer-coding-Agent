@@ -1,5 +1,4 @@
-﻿
-"""
+﻿"""
 Coder — writes the implementation from an approved plan, and on a retry,
 patches only what Tester or Security flagged instead of regenerating
 everything.
@@ -8,6 +7,7 @@ from __future__ import annotations
 
 import logging
 
+from governance.opa_client import log_tool_call
 from services.llm_service import LLMGenerationError, generate_json
 from services.log_service import emit_log
 from workflow.state import WorkflowState
@@ -39,18 +39,42 @@ async def coder_node(state: WorkflowState) -> dict:
         await emit_log(task_id, "CODER", "ERROR", "✗", f"Generation failed: {exc}")
         raise
 
+    # Coder runs under the credential Identity Broker issued (workflow.py
+    # puts identity_broker right before coder in the graph). A path that
+    # escapes the workspace never gets written, no matter what the model
+    # produced — that's the one thing Identity Broker's scope actually
+    # exists to stop, so it's worth checking again here rather than trusting
+    # the model kept to the plan. Everything else still gets written; the
+    # rest of the scope is advisory bookkeeping, not a strict per-file
+    # whitelist (see derive_scope() in governance/opa_client.py).
+    accepted_files = {}
+    for file_path, content in new_files.items():
+        in_scope = await log_tool_call(task_id, "file_write", target=file_path)
+        if _escapes_workspace(file_path):
+            await emit_log(task_id, "CODER", "ERROR", "✗", f"Refused to write outside the workspace: {file_path}")
+            continue
+        if not in_scope:
+            logger.info("File %s written outside the token's declared tool scope for task %s", file_path, task_id)
+        accepted_files[file_path] = content
+
     # Merge, don't clobber — files that already passed shouldn't disappear
     # just because this call only touched two of them.
-    code_files = {**state.get("code_files", {}), **new_files}
+    code_files = {**state.get("code_files", {}), **accepted_files}
     total_lines = sum(content.count("\n") + 1 for content in code_files.values())
 
-    await emit_log(task_id, "CODER", "PASS", "✓", f"{len(new_files)} file(s) written, {total_lines} lines total")
+    await emit_log(
+        task_id, "CODER", "PASS", "✓", f"{len(accepted_files)} file(s) written, {total_lines} lines total"
+    )
 
     return {
         "code_files": code_files,
         "coder_retries": retry_count + 1 if is_retry else retry_count,
-        "messages": [{"agent": "CODER", "content": {"files_touched": list(new_files.keys())}}],
+        "messages": [{"agent": "CODER", "content": {"files_touched": list(accepted_files.keys())}}],
     }
+
+
+def _escapes_workspace(file_path: str) -> bool:
+    return file_path.startswith("/") or ".." in file_path.split("/")
 
 
 def _build_prompt(state: WorkflowState, is_retry: bool) -> str:

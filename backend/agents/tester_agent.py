@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from governance.opa_client import log_tool_call
 from services.llm_service import LLMGenerationError, generate_json
 from services.log_service import emit_log
 from workflow.state import WorkflowState
@@ -45,6 +46,7 @@ async def tester_node(state: WorkflowState) -> dict:
     test_files = result.get("test_files", {})
 
     if (state.get("language") or "").lower() == "python":
+        await log_tool_call(task_id, "pytest")
         test_results = await _run_pytest(code_files, test_files)
     else:
         # Non-Python: no local runner wired up yet, fall back to the model's
