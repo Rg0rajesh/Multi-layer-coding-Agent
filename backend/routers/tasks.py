@@ -1,5 +1,6 @@
-﻿#backend/routers/tasks.py
-"""Task CRUD + listing. Auth, execution triggers, and agent wiring live
+﻿# backend/routers/tasks.py
+"""
+Task CRUD + listing. Auth, execution triggers, and agent wiring live
 elsewhere — this router is deliberately just the REST surface over
 services/task_service.py, plus the one line that actually kicks a
 created task off to Celery.
@@ -9,6 +10,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -40,12 +42,14 @@ class TaskCreate(BaseModel):
     project_type: str | None = None
     project_id: UUID | None = None
     priority: str = "medium"
-    coordination_pattern: str = "sequential"
     max_exec_minutes: int = Field(10, ge=1, le=120)
     output_format: str = "commented"
     git_integration: bool = False
     agents_config: dict = Field(default_factory=dict)
     context_files: list = Field(default_factory=list)
+    # No coordination_pattern field — only one workflow graph ever ran
+    # (workflow/workflow.py::build_agentx_graph), so offering a choice
+    # here was cosmetic. See migration 003 for the DB-side removal.
 
 
 class TaskUpdate(BaseModel):
@@ -69,7 +73,6 @@ class TaskOut(BaseModel):
     framework: str | None
     status: str
     priority: str
-    coordination_pattern: str
     replan_count: int
     coder_retries: int
     safety_issues_found: int
@@ -107,10 +110,10 @@ async def create_task_endpoint(
 ):
     task = await create_task(db, user_id=current_user.id, data=payload.model_dump())
 
-    # Hand off to Celery right after the row lands — the task stays
-    # "pending" until a worker picks it up, but at least it's queued
-    # instead of sitting there forever waiting on nothing.
-    run_workflow_task.delay(str(task.id))
+    # .delay() talks to Redis synchronously (kombu isn't async), so calling
+    # it directly on this coroutine blocks the event loop for every task
+    # creation under load. Push it to the threadpool instead.
+    await run_in_threadpool(run_workflow_task.delay, str(task.id))
 
     return task
 
