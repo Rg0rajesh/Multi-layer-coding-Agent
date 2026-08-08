@@ -2,6 +2,7 @@
 from collections.abc import AsyncGenerator
 
 from sqlalchemy import MetaData
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -22,8 +23,23 @@ class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
 
+def _async_database_url(raw_url: str) -> str:
+    """
+    DATABASE_URL in .env is the plain postgresql:// form people write by
+    hand (and what alembic/psql expect) — asyncpg needs the +asyncpg
+    driver suffix. A blind string .replace("postgresql://", ...) breaks
+    the moment DATABASE_URL is anything other than that exact bare scheme
+    (e.g. postgresql+psycopg2://...). Parsing it with SQLAlchemy's own
+    URL type means only the driver gets touched, never the rest of the URL.
+    """
+    url = make_url(raw_url)
+    if url.get_backend_name() == "postgresql" and url.get_driver_name() in ("psycopg2", ""):
+        url = url.set(drivername="postgresql+asyncpg")
+    return str(url)
+
+
 engine = create_async_engine(
-    settings.database_url.replace("postgresql://", "postgresql+asyncpg://"),
+    _async_database_url(settings.database_url),
     pool_pre_ping=True,
     pool_size=10,
     max_overflow=20,
