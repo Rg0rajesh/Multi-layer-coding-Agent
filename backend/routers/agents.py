@@ -133,9 +133,7 @@ async def approve_plan(
     current_user: User = Depends(get_current_user),
 ):
     await _get_owned_task(db, task_id, current_user)
-
-    if not human_agent.submit_decision(str(task_id), "approve"):
-        raise HTTPException(status.HTTP_409_CONFLICT, "Nothing is waiting on approval for this task")
+    await human_agent.submit_decision_async(str(task_id), "approve")
 
 
 @router.post("/{task_id}/reject", status_code=status.HTTP_204_NO_CONTENT)
@@ -146,9 +144,7 @@ async def reject_plan(
     current_user: User = Depends(get_current_user),
 ):
     await _get_owned_task(db, task_id, current_user)
-
-    if not human_agent.submit_decision(str(task_id), "reject", body.reason):
-        raise HTTPException(status.HTTP_409_CONFLICT, "Nothing is waiting on approval for this task")
+    await human_agent.submit_decision_async(str(task_id), "reject", body.reason)
 
 
 @router.post("/{task_id}/edit-plan", status_code=status.HTTP_204_NO_CONTENT)
@@ -159,9 +155,7 @@ async def edit_plan(
     current_user: User = Depends(get_current_user),
 ):
     await _get_owned_task(db, task_id, current_user)
-
-    if not human_agent.submit_decision(str(task_id), "edit", body.plan):
-        raise HTTPException(status.HTTP_409_CONFLICT, "Nothing is waiting on approval for this task")
+    await human_agent.submit_decision_async(str(task_id), "edit", body.plan)
 
 
 @router.post("/{task_id}/add-role", response_model=AgentRunOut, status_code=status.HTTP_201_CREATED)
@@ -175,8 +169,8 @@ async def add_dynamic_role(
     The C3 novelty: a human adding a brand-new agent to a workflow that's
     already running, not just approving what's already there. Writes an
     audit row immediately (so it shows up in Live Monitor and survives a
-    page refresh) and queues the request for the workflow to pick up on
-    its next node transition.
+    page refresh) and queues the request in Redis for the workflow to
+    pick up on its next node transition.
     """
     await _get_owned_task(db, task_id, current_user)
 
@@ -204,7 +198,7 @@ async def add_dynamic_role(
 
     # Only after the DB write succeeds — no point queuing a role the audit
     # trail doesn't know about.
-    human_agent.queue_dynamic_role(str(task_id), role_name, body.config, body.reason)
+    await human_agent.queue_dynamic_role_async(str(task_id), role_name, body.config, body.reason)
 
     await emit_log(
         str(task_id), "HUMAN", "TASK", "✎",
