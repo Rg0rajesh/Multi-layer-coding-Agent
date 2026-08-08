@@ -5,7 +5,7 @@ Celery entrypoint for AGENTX's background task execution.
 This file owns exactly one job: take a task_id off the queue, run the
 agent workflow against it, and make sure the DB reflects what happened.
 It does not know anything about Planner/Coder/Tester internals — that
-lives in workflow/workflow.py (Step 8) and is imported lazily below.
+lives in workflow/workflow.py and is imported lazily below.
 """
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from config import settings
 from database import async_session_factory, engine
 from models.task import Task
 from models.log_entry import LogEntry
+from services.llm_service import OllamaUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -56,13 +57,13 @@ DEFAULT_SOFT_LIMIT_SECONDS = 20 * 60
 DEFAULT_HARD_LIMIT_SECONDS = 25 * 60
 
 
-class TransientWorkflowError(Exception):
+class GovernanceUnavailableError(Exception):
     """
-    Raised by the workflow layer for failures worth retrying — Ollama not
-    warmed up yet, a dropped DB connection, etc. Anything else raised out
-    of run_task_workflow is treated as a genuine failure and NOT retried,
-    since retrying a bad Planner output just burns tokens for the same
-    result.
+    Raised when OPA can't be reached during Identity Broker's credential
+    issuance. Same treatment as an Ollama hiccup — infra flapping, not a
+    bad result, so it's worth a Celery retry rather than a hard failure.
+    Defined here (not in governance/opa_client.py) to keep the retry
+    policy decision in one place, next to where it's actually enforced.
     """
 
 
@@ -155,7 +156,7 @@ def run_workflow_task(self, task_id: str) -> dict:
     even before workflow/workflow.py has real content.
     """
     try:
-        from workflow.workflow import run_task_workflow  # Step 8 boundary
+        from workflow.workflow import run_task_workflow
     except ImportError:
         logger.error("workflow.workflow.run_task_workflow not implemented yet")
         _run_async(_mark_task_finished(task_id, success=False, error="Workflow engine not implemented"))
@@ -172,7 +173,7 @@ def run_workflow_task(self, task_id: str) -> dict:
         _run_async(_mark_task_finished(task_id, success=False, error="Task exceeded its time limit"))
         raise
 
-    except TransientWorkflowError as exc:
+    except (OllamaUnavailableError, GovernanceUnavailableError) as exc:
         logger.warning("Transient failure on task %s, retrying: %s", task_id, exc)
         raise self.retry(exc=exc)
 
