@@ -20,12 +20,17 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 
-class TransientWorkflowError(Exception):
+class OllamaUnavailableError(Exception):
     """
     Connection-level failure — Ollama not reachable, timed out, still
     loading the model into memory. Callers (ultimately celery_worker)
-    can retry the whole step on this. Not raised for bad model output;
+    retry the whole step on this. Not raised for bad model output;
     that's a different problem and retrying blindly just burns time.
+
+    Named OllamaUnavailableError (not TransientWorkflowError) on purpose —
+    celery_worker.py used to define its own class with that exact name,
+    and the two never matched, so real Ollama timeouts were falling
+    through to the generic failure path instead of being retried.
     """
 
 
@@ -129,7 +134,7 @@ async def chat(
                 )
                 await asyncio.sleep(_RETRY_BACKOFF_SECONDS * attempt)
                 continue
-            raise TransientWorkflowError(f"Ollama unreachable after {attempt} attempts") from exc
+            raise OllamaUnavailableError(f"Ollama unreachable after {attempt} attempts") from exc
 
         except httpx.HTTPStatusError as exc:
             # 4xx/5xx from Ollama itself — e.g. model not pulled yet. Not
@@ -140,7 +145,7 @@ async def chat(
 
     # Unreachable in practice — loop above always returns or raises —
     # but keeps type checkers happy.
-    raise TransientWorkflowError(str(last_error))
+    raise OllamaUnavailableError(str(last_error))
 
 
 # ---------------------------------------------------------------------------
