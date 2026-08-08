@@ -1,8 +1,9 @@
 ﻿# backend/services/auth_service.py
 """
 Handles the actual auth logic: password hashing, JWT issuance, refresh-token
-rotation, and the GitHub/Google OAuth exchange. routers/auth.py stays thin
-and just wires HTTP <-> these functions.
+rotation, the current-user dependency every protected route uses, and the
+GitHub/Google OAuth exchange. routers/auth.py stays thin and just wires
+HTTP <-> these functions.
 """
 from __future__ import annotations
 
@@ -12,7 +13,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 
 import httpx
-from fastapi import HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 from fastapi.concurrency import run_in_threadpool
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -20,6 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
+from database import get_db
 from models.user import User
 from models.user_session import UserSession
 
@@ -32,9 +34,9 @@ GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 
 
-# +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# ---------------------------------------------------------------------------
 # Passwords
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++    
+# ---------------------------------------------------------------------------
 
 async def hash_password(raw: str) -> str:
     # bcrypt is intentionally slow (~100ms) — never block the event loop with it
@@ -45,9 +47,9 @@ async def verify_password(raw: str, hashed: str) -> bool:
     return await run_in_threadpool(pwd_context.verify, raw, hashed)
 
 
-# ***************************************************************************
+# ---------------------------------------------------------------------------
 # JWT access tokens
-#***************************************************************************    
+# ---------------------------------------------------------------------------
 
 def create_access_token(user_id: str) -> str:
     expires = datetime.now(timezone.utc) + timedelta(minutes=settings.access_token_expire_minutes)
@@ -67,7 +69,32 @@ def decode_access_token(token: str) -> str:
     return payload["sub"]
 
 
-# ***************************************************************************
+async def get_current_user(
+    authorization: str | None = Header(None),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    """
+    The dependency every protected router uses. Pulls the bearer token off
+    the Authorization header, decodes it, loads the user. Two separate
+    failure cases matter here: a bad/expired token (401) vs. a valid token
+    for an account that's since been deactivated (403) — decode_access_token
+    alone can only catch the first one.
+    """
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing or malformed Authorization header")
+
+    user_id = decode_access_token(authorization.removeprefix("Bearer "))
+
+    user = await db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User no longer exists")
+    if not user.is_active:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "This account has been deactivated")
+
+    return user
+
+
+# ---------------------------------------------------------------------------
 # Refresh tokens — opaque random string, only the SHA-256 digest hits the DB.
 #
 # We deliberately don't bcrypt these: bcrypt is slow on purpose so brute-
@@ -78,7 +105,7 @@ def decode_access_token(token: str) -> str:
 # (O(n) per refresh, and bcrypt-slow on top of that). SHA-256 gives a
 # deterministic digest we can index and look up directly (O(log n) on the
 # unique btree index already defined on token_hash).
-# ***************************************************************************
+# ---------------------------------------------------------------------------
 
 def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
@@ -140,9 +167,9 @@ async def revoke_refresh_token(db: AsyncSession, raw_token: str) -> None:
         await db.commit()
 
 
-# ***************************************************************************
+# ---------------------------------------------------------------------------
 # OAuth — GitHub & Google
-# ************ ***********************************************************************
+# ---------------------------------------------------------------------------
 
 async def exchange_github_code(code: str) -> dict:
     """Trades an OAuth code for the GitHub profile (and primary verified email)."""
