@@ -19,6 +19,11 @@ allowed_scope = scope {
     }
 }
 
+# Stable API contract consumed by governance/opa_client.py.
+# OPA evaluates data.agentx.authz.scope and the client reads
+# result.allowed_scope.
+scope = {"allowed_scope": allowed_scope}
+
 requires_git {
     input.git_integration == true
 }
