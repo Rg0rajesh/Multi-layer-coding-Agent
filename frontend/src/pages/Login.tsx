@@ -1,5 +1,4 @@
-﻿
-// frontend/src/pages/Login.tsx
+﻿// frontend/src/pages/Login.tsx
 /**
  * Auth gateway — one page, two modes. Matches Frontend Spec page 02:
  * split layout on desktop (log-stream panel + form), single column on
