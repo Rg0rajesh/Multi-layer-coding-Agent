@@ -28,10 +28,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // The access token only lives in memory, so it's gone after a hard
-  // refresh. The httpOnly refresh cookie survives that though — this is
-  // what quietly re-establishes the session before the app renders
-  // behind a login wall.
   useEffect(() => {
     let cancelled = false;
 
@@ -88,8 +84,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       await api.post("/auth/logout");
     } finally {
-      // Clear client state regardless of whether the request succeeded —
-      // a network hiccup on logout shouldn't leave someone stuck "logged in."
       setAccessToken(null);
       setUser(null);
     }

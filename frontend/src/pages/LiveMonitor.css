@@ -1,0 +1,57 @@
+.live-monitor__risk {
+  padding: 6px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.live-monitor__risk--block {
+  border-style: dashed;
+  border-width: 2px;
+}
+
+.live-monitor__layout {
+  display: grid;
+  grid-template-columns: 1fr 380px;
+  gap: 24px;
+  align-items: start;
+}
+
+.live-monitor__groups {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.live-monitor__group-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+}
+
+.live-monitor__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.live-monitor__log {
+  height: calc(100vh - 180px);
+  position: sticky;
+  top: 24px;
+}
+
+@media (max-width: 1100px) {
+  .live-monitor__layout {
+    grid-template-columns: 1fr;
+  }
+  .live-monitor__log {
+    height: 400px;
+    position: static;
+  }
+}

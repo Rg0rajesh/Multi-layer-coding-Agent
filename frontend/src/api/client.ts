@@ -1,4 +1,3 @@
-﻿
 // Thin fetch wrapper — every page talks to the backend through this,
 // not raw fetch(). Keeps auth headers, JSON handling, and token refresh
 // in one place instead of copy-pasted into every hook.
@@ -25,9 +24,6 @@ export class ApiError extends Error {
   }
 }
 
-// Access token lives here and nowhere else. The refresh token is an
-// httpOnly cookie the browser already handles — we never touch it
-// directly, which is the whole point of using a cookie for it.
 let accessToken: string | null = null;
 
 export function setAccessToken(token: string | null) {
@@ -38,9 +34,6 @@ export function getAccessToken() {
   return accessToken;
 }
 
-// Guards against the "three components 401 at the same time" case.
-// Refresh tokens rotate on use, so firing three /auth/refresh calls
-// back to back would burn the session the first call just issued.
 let pendingRefresh: Promise<string | null> | null = null;
 
 async function refreshAccessToken(): Promise<string | null> {
@@ -65,9 +58,7 @@ async function refreshAccessToken(): Promise<string | null> {
 
 interface RequestOptions extends Omit<RequestInit, "body"> {
   body?: unknown;
-  /** Skip attaching the bearer token — login/register/refresh itself */
   skipAuth?: boolean;
-  /** Internal — stops a failed refresh from retrying forever */
   skipRetry?: boolean;
 }
 
@@ -77,7 +68,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   const res = await fetch(`${API_BASE_URL}${API_PREFIX}${path}`, {
     ...rest,
     method: method ?? (body ? "POST" : "GET"),
-    credentials: "include", // needed so the refresh cookie actually goes out
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
       ...(accessToken && !skipAuth ? { Authorization: `Bearer ${accessToken}` } : {}),
@@ -86,9 +77,6 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
 
-  // One retry, only once — a token that's still bad after a fresh
-  // refresh means the user is genuinely logged out, not that we should
-  // keep hammering /auth/refresh.
   if (res.status === 401 && !skipAuth && !skipRetry) {
     const newToken = await refreshAccessToken();
     if (newToken) {
