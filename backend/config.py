@@ -1,5 +1,8 @@
 ﻿# backend/config.py
+from __future__ import annotations
+
 from functools import lru_cache
+from typing import Any
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -64,18 +67,18 @@ class Settings(BaseSettings):
 
     # CORS — comma-separated in .env, e.g.
     # CORS_ORIGINS=https://app.agentx.dev,https://staging.agentx.dev
-    cors_origins: list[str] = ["http://localhost:3000"]
+    # Typed as Any so pydantic-settings won't try json.loads() on the raw
+    # env string; the validator below handles comma-separated → list conversion.
+    cors_origins: Any = ["http://localhost:3000"]
 
     @field_validator("cors_origins", mode="before")
     @classmethod
     def _split_comma_separated(cls, value):
-        """
-        pydantic-settings v2 expects JSON array syntax for list-typed env
-        vars by default (CORS_ORIGINS='["a","b"]'), which nobody actually
-        writes in a .env file. This makes the plain comma-separated form
-        work instead of failing settings validation at app startup.
-        """
         if isinstance(value, str):
+            value = value.strip()
+            if value.startswith("["):
+                import json
+                return json.loads(value)
             return [origin.strip() for origin in value.split(",") if origin.strip()]
         return value
 

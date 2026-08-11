@@ -82,7 +82,7 @@ services:
     ports: ["8001:8000"]
     networks: [agentx-net]
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8000/api/v1/heartbeat || exit 1"]
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/8000"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -100,7 +100,7 @@ services:
     ports: ["8181:8181"]
     networks: [agentx-net]
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O- http://localhost:8181/health || exit 1"]
+      test: ["CMD", "/opa", "eval", "--bundle", "/policies", "data"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -140,11 +140,15 @@ services:
       CHROMA_URL: http://chromadb:8000
       OPA_URL: http://opa:8181
     networks: [agentx-net]
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A celery_worker inspect ping -d celery@$$HOSTNAME || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
       ollama: { condition: service_healthy }
-      opa: { condition: service_healthy }
 
   frontend:
     build:
@@ -165,4 +169,6 @@ services:
       - ./ssl:/etc/nginx/ssl:ro
     ports: ["80:80", "443:443"]
     networks: [agentx-net]
-    depends_on: [backend, frontend]
+    depends_on:
+      backend: { condition: service_healthy }
+      frontend: { condition: service_started }

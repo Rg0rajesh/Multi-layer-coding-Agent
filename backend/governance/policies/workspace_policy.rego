@@ -3,7 +3,7 @@ package agentx.authz
 # Default-deny: if input doesn't match any rule below, nothing is granted.
 default allowed_scope = {"tools": [], "files": []}
 
-allowed_scope = scope {
+allowed_scope = scope if {
     not requires_git
     scope := {
         "tools": base_tools,
@@ -11,7 +11,7 @@ allowed_scope = scope {
     }
 }
 
-allowed_scope = scope {
+allowed_scope = scope if {
     requires_git
     scope := {
         "tools": array.concat(base_tools, ["git"]),
@@ -19,7 +19,7 @@ allowed_scope = scope {
     }
 }
 
-requires_git {
+requires_git if {
     input.git_integration == true
 }
 
@@ -37,10 +37,10 @@ safe_files = [f |
     not escapes_workspace(f)
 ]
 
-escapes_workspace(path) {
+escapes_workspace(path) if {
     startswith(path, "..")
 }
 
-escapes_workspace(path) {
+escapes_workspace(path) if {
     startswith(path, "/")
 }

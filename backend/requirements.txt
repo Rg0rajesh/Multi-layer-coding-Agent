@@ -1,96 +1,42 @@
-﻿# backend/main.py
-"""
-AGENTX API entry point. Owns app wiring only — routers hold the actual
-endpoint logic, services/agents/workflow hold everything else. Keeping
-this file thin is deliberate: it's the one module every test and every
-deployment path imports, so it shouldn't be where anyone goes looking
-for business logic.
-"""
-from __future__ import annotations
+# --- Web framework ---
+fastapi>=0.111,<0.112
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9        # form parsing, needed for a couple of OAuth callback shapes
+email-validator>=2.1           # pulled in by pydantic's EmailStr (auth/team schemas)
 
-import asyncio
-import logging
-from contextlib import asynccontextmanager
+# --- Config / validation ---
+pydantic>=2.6
+pydantic-settings>=2.2
 
-from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+# --- Database ---
+sqlalchemy[asyncio]>=2.0
+asyncpg>=0.29
+alembic>=1.13                  # schema.sql bootstraps fresh DBs; alembic covers future migrations
 
-# Import side effect only: registers every ORM class on the shared
-# declarative registry before any request comes in. Without this, a
-# string-based relationship like Task.risk_score -> "SessionRiskScore"
-# won't resolve unless some router happened to import that specific
-# model module first — easy to break by accident, so we guarantee it
-# here instead of relying on import order elsewhere.
-import models  # noqa: F401
+# --- Auth ---
+python-jose[cryptography]>=3.3
+passlib[bcrypt]>=1.7.4
 
-from config import settings
-from routers import agents, auth, logs, outputs, profile, settings as settings_router, tasks, team, websocket
-from services import llm_service
-from services.task_service import TaskNotFoundError
+# --- Background jobs / cache / realtime ---
+celery>=5.3
+redis>=5.0
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# --- Agents / orchestration ---
+langgraph>=0.1.5
+autogen-agentchat>=0.2
 
+# --- Memory (C1) ---
+chromadb>=0.5
+mem0ai>=0.1
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Warm both local models up front so the first real task doesn't eat
-    # a cold-start penalty on top of its own timeout budget. Guardrail
-    # runs before Planner on every task, so it needs to be ready just as
-    # much as the coder model does — firing both warm-ups together instead
-    # of one after another roughly halves this wait on a fresh container.
-    warmups = [
-        llm_service.ensure_model_ready(settings.ollama_model),
-        llm_service.ensure_model_ready(settings.llama_guard_model),
-    ]
-    results = await asyncio.gather(*warmups, return_exceptions=True)
-    for model, result in zip((settings.ollama_model, settings.llama_guard_model), results):
-        if isinstance(result, Exception):
-            logger.warning("Model warm-up failed for %s — will retry on first real request", model)
+# --- Safety agents (C2) ---
+bandit>=1.7
+pylint>=3.1
+semgrep>=1.66
 
-    yield
+# --- HTTP client (Ollama, GitHub/Google OAuth, OPA) ---
+httpx>=0.27
 
-    await llm_service.close_client()
-
-
-app = FastAPI(
-    title="AGENTX API",
-    version="2.1.0",
-    lifespan=lifespan,
-)
-
-# Dev default covers the Vite server (docker-compose.yml). Anything beyond
-# localhost — staging, prod behind nginx.conf — comes from CORS_ORIGINS
-# as a comma-separated env var, so shipping a new domain never needs a
-# code change here.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.cors_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-@app.exception_handler(TaskNotFoundError)
-async def task_not_found_handler(request: Request, exc: TaskNotFoundError) -> JSONResponse:
-    # Routers already catch this in most places and raise HTTPException
-    # directly — this is the safety net for anywhere that doesn't.
-    return JSONResponse(status_code=404, content={"detail": f"Task {exc.task_id} not found"})
-
-
-app.include_router(auth.router)
-app.include_router(tasks.router)
-app.include_router(agents.router)
-app.include_router(outputs.router)
-app.include_router(logs.router)
-app.include_router(team.router)
-app.include_router(profile.router)
-app.include_router(settings_router.router)
-app.include_router(websocket.router)
-
-
-@app.get("/health")
-async def health() -> dict:
-    return {"status": "ok"}
+# --- Testing ---
+pytest>=8.1
+pytest-asyncio>=0.23
