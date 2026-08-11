@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agent X — Error Logs</title>
+  <link rel="stylesheet" href="css/theme.css" />
+  <link rel="stylesheet" href="css/sidebar.css" />
+  <link rel="stylesheet" href="css/errorlogs.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <div id="sidebar-root"></div>
+    <main class="app-main">
+      <div class="page-header">
+        <div>
+          <h1>Error Logs</h1>
+          <p class="page-header__meta">Pick a task to see its log stream and resolve flagged entries.</p>
+        </div>
+      </div>
+
+      <div class="errorlogs__task-picker">
+        <label>Task ID
+          <input type="text" id="task-id-input" placeholder="Paste a task ID, or open this page from History" />
+        </label>
+        <button type="button" id="load-btn" class="btn btn--fill">Load</button>
+      </div>
+
+      <div class="errorlogs__filters" id="filters" style="display:none">
+        <select id="severity-filter">
+          <option value="">All severities</option>
+          <option value="info">Info</option>
+          <option value="critical">Critical</option>
+        </select>
+        <select id="agent-filter">
+          <option value="">All agents</option>
+          <option value="GUARDRAIL">Guardrail</option>
+          <option value="PLANNER">Planner</option>
+          <option value="GROUNDING">Grounding</option>
+          <option value="HUMAN">Human</option>
+          <option value="IDENTITY_BROKER">Identity Broker</option>
+          <option value="CODER">Coder</option>
+          <option value="TESTER">Tester</option>
+          <option value="SECURITY">Security</option>
+          <option value="REVIEWER">Reviewer</option>
+          <option value="CONTEXT_CURATOR">Context Curator</option>
+        </select>
+        <label class="errorlogs__unresolved-only">
+          <input type="checkbox" id="unresolved-only" />
+          Unresolved only
+        </label>
+      </div>
+
+      <p class="errorlogs__status-text" id="status-text" style="display:none"></p>
+      <div class="errorlogs__list" id="log-list"></div>
+    </main>
+  </div>
+
+  <script src="js/config.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/shell.js"></script>
+  <script src="js/errorlogs.js"></script>
+</body>
+</html>

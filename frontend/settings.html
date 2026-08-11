@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agent X — Settings</title>
+  <link rel="stylesheet" href="css/theme.css" />
+  <link rel="stylesheet" href="css/sidebar.css" />
+  <link rel="stylesheet" href="css/settings.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <div id="sidebar-root"></div>
+    <main class="app-main">
+      <div class="page-header">
+        <div>
+          <h1>Settings</h1>
+          <p class="page-header__meta">Manage your account security and sessions</p>
+        </div>
+      </div>
+
+      <div class="settings__section card">
+        <h3 style="margin-top: 0;">Change Password</h3>
+        <form class="settings__form" id="password-form">
+          <label>
+            Current Password
+            <input type="password" id="current-password" required />
+          </label>
+          <label>
+            New Password
+            <input type="password" id="new-password" required />
+          </label>
+          <p id="password-error" style="display:none; color: var(--error); font-weight: 600; margin: 10px 0 0;"></p>
+          <button type="submit" class="btn btn--fill" style="margin-top: 10px; width: max-content;">Update Password</button>
+        </form>
+      </div>
+
+      <div class="settings__section card" style="margin-top: 20px;">
+        <h3 style="margin-top: 0;">Two-Factor Authentication</h3>
+        <label class="settings__toggle">
+          <input type="checkbox" id="two-factor-toggle" />
+          <span>Enable 2FA</span>
+        </label>
+        <p id="two-factor-secret" class="mono" style="display:none; padding: 10px; background: var(--surface-2); border-radius: var(--radius-sm); margin-top: 14px; word-break: break-all;"></p>
+      </div>
+
+      <div class="settings__section card" style="margin-top: 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+          <h3 style="margin: 0;">Active Sessions</h3>
+          <button id="revoke-others-btn" class="btn btn--outline btn-sm">Revoke all others</button>
+        </div>
+        <div id="sessions-list" class="settings__sessions">
+          Loading sessions...
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <script src="js/config.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/shell.js"></script>
+  <script src="js/settings.js"></script>
+</body>
+</html>

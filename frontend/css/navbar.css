@@ -1,0 +1,183 @@
+/* frontend/src/components/Navbar.css
+ *
+ * Structure: fixed 64px bar, frosted glass panel, 1px hairline border,
+ * layered sheen for the "glossy" read, single specular highlight line.
+ * Every value here is alpha/blur — zero hue, per spec page 5.
+ */
+
+.navbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  height: 64px;
+
+  background: var(--nav-glass-bg);
+  backdrop-filter: blur(var(--nav-blur));
+  -webkit-backdrop-filter: blur(var(--nav-blur));
+  border-bottom: 1px solid var(--nav-glass-border);
+
+  transition: background 200ms var(--ease-out), backdrop-filter 200ms var(--ease-out);
+}
+
+.navbar.is-scrolled {
+  background: var(--nav-glass-bg-scrolled);
+  backdrop-filter: blur(var(--nav-blur-scrolled));
+  -webkit-backdrop-filter: blur(var(--nav-blur-scrolled));
+}
+
+/* Stacked translucent bands toward the top edge — each one a hair more
+   opaque than the last, faked with a multi-stop alpha gradient rather
+   than several actual stacked elements. */
+.navbar__sheen {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.10) 0%,
+    rgba(255, 255, 255, 0.05) 35%,
+    rgba(255, 255, 255, 0) 100%
+  );
+}
+
+[data-theme="dark"] .navbar__sheen {
+  background: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.06) 0%,
+    rgba(255, 255, 255, 0.02) 35%,
+    rgba(255, 255, 255, 0) 100%
+  );
+}
+
+/* The single hairline that reads as "glossy" rather than "flat frosted
+   panel" — sits right at the top inside edge. */
+.navbar__specular {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: var(--nav-specular);
+}
+
+.navbar__inner {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  height: 100%;
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 0 32px;
+}
+
+.navbar__brand {
+  display: flex;
+  align-items: center;
+  text-decoration: none;
+}
+
+.navbar__links {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.navbar__link {
+  position: relative;
+  padding: 8px 16px;
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-family: var(--font-body);
+  font-size: 0.9rem;
+  text-decoration: none;
+  transition: background 150ms var(--ease-out), color 150ms var(--ease-out);
+}
+
+.navbar__link:hover {
+  background: var(--nav-hover-wash);
+  color: var(--text);
+}
+
+/* Active link: solid inverse-fill pill, not a colored underline. */
+.navbar__link.is-active {
+  background: var(--fill);
+  color: var(--fill-text);
+  font-weight: 600;
+}
+
+.navbar__actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.navbar__theme-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  border: 1px solid var(--nav-glass-border);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: background 150ms var(--ease-out);
+}
+
+.navbar__theme-toggle:hover {
+  background: var(--nav-hover-wash);
+}
+
+/* CTA — same glossy top-highlight treatment as the bar itself, so it
+   reads as "cut from the same glass" per spec. */
+.navbar__cta {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  height: 40px;
+  padding: 0 20px;
+  border-radius: 999px;
+  background: var(--fill);
+  color: var(--fill-text);
+  font-family: var(--font-body);
+  font-size: 0.88rem;
+  font-weight: 600;
+  text-decoration: none;
+  overflow: hidden;
+  transition: opacity 150ms var(--ease-out);
+}
+
+.navbar__cta:hover {
+  opacity: 0.88;
+}
+
+.navbar__cta-sheen {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to bottom, rgba(255, 255, 255, 0.22), transparent 60%);
+  pointer-events: none;
+}
+
+@media (max-width: 720px) {
+  .navbar__links {
+    display: none;
+  }
+
+  .navbar__inner {
+    padding: 0 20px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .navbar,
+  .navbar__link,
+  .navbar__cta {
+    transition: none;
+  }
+}

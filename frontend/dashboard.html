@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agent X — Dashboard</title>
+  <link rel="stylesheet" href="css/theme.css" />
+  <link rel="stylesheet" href="css/sidebar.css" />
+  <link rel="stylesheet" href="css/dashboard.css" />
+  <link rel="stylesheet" href="css/status-pill.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <div id="sidebar-root"></div>
+    <main class="app-main">
+      <div class="page-header">
+        <div>
+          <h1>Dashboard</h1>
+          <p class="page-header__meta" id="task-summary">Loading tasks…</p>
+        </div>
+        <a href="newtask.html" class="btn btn--fill">New Task</a>
+      </div>
+
+      <p class="dashboard__status-text" id="status-text"></p>
+
+      <div id="empty-state" class="card" style="display:none; text-align:center; padding: 40px;">
+        <h3>No tasks yet</h3>
+        <p class="text-secondary" style="margin-bottom: 20px;">Create your first task to get started.</p>
+        <a href="newtask.html" class="btn btn--outline">Create a Task</a>
+      </div>
+
+      <div class="dashboard__list" id="task-list"></div>
+    </main>
+  </div>
+
+  <script src="js/config.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/shell.js"></script>
+  <script src="js/dashboard.js"></script>
+</body>
+</html>

@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Docs — AGENT X</title>
+<link rel="stylesheet" href="assets/theme.css">
+<style>
+  .docs-shell{ display:grid; grid-template-columns: 220px 1fr; gap: 32px; max-width: 900px; }
+  @media (max-width:800px){ .docs-shell{ grid-template-columns: 1fr; } .docs-nav{ position:static; } }
+  .docs-nav{ position: sticky; top: calc(var(--nav-h) + 20px); align-self:start; }
+  .docs-nav a{ display:block; padding:7px 10px; border-radius: var(--radius); font-size:13px; color: var(--text-secondary); }
+  .docs-nav a.is-active{ background: var(--fill); color: var(--fill-text); }
+  .docs-toc{ position: sticky; top: calc(var(--nav-h) + 20px); align-self:start; font-size:12.5px; }
+  .docs-toc a{ display:block; padding: 5px 0; color: var(--text-dim); border-left: 2px solid transparent; padding-left:10px; }
+  .docs-toc a.is-active{ color: var(--text); border-color: var(--text); font-weight:600; }
+  .docs-content h2{ font-size:1.5rem; margin-top:44px; scroll-margin-top: calc(var(--nav-h) + 20px); }
+  .docs-content h2:first-child{ margin-top:0; }
+  .endpoint{ border:1px solid var(--border); border-radius: var(--radius); padding:14px 16px; margin: 12px 0; }
+  .endpoint .line1{ display:flex; align-items:center; gap:10px; margin-bottom:6px; }
+  .method{ font-family: var(--font-mono); font-weight:800; font-size:12px; padding:2px 8px; border:1px solid var(--border-strong); border-radius:4px; }
+  .endpoint p{ font-size:13px; margin:0; }
+  .callout{ border-left: 3px solid var(--text); padding: 12px 16px; background: var(--surface); border-radius: 0 var(--radius) var(--radius) 0; margin: 16px 0; font-size:13.5px; }
+  .callout b{ display:block; margin-bottom:4px; }
+  .search-modal-trigger{ display:flex; align-items:center; gap:8px; padding: 0 14px; height:38px; border:1px solid var(--border); border-radius: var(--radius-pill); background: var(--surface); max-width:320px; margin: 0 auto 28px; color: var(--text-dim); font-size:13px; }
+</style>
+</head>
+<body data-page="docs">
+
+<div id="app-nav"></div>
+<div id="app-sidebar"></div>
+
+<div class="app-shell">
+<main class="main-col">
+
+  <div class="page-head"><div><span class="eyebrow">Reference</span><h1>Documentation</h1></div></div>
+  <div class="search-modal-trigger"><span class="icon-slot"></span>Search docs…</div>
+
+  <div class="docs-shell">
+    <nav class="docs-nav docs-toc-source">
+      <a href="#auth" class="is-active">Authentication</a>
+      <a href="#tasks">Tasks</a>
+      <a href="#agents">Agents &amp; human approval</a>
+      <a href="#outputs">Outputs</a>
+      <a href="#logs">Logs &amp; alerts</a>
+      <a href="#teams">Teams</a>
+      <a href="#settings">Settings &amp; profile</a>
+      <a href="#ws">WebSocket</a>
+      <a href="#isolation">Data isolation</a>
+    </nav>
+
+    <div class="docs-content">
+
+      <h2 id="auth">Authentication</h2>
+      <p>All protected endpoints require <code class="mono">Authorization: Bearer &lt;JWT&gt;</code>. Access tokens expire in 30 minutes; the refresh token lives in an httpOnly cookie and rotates on every use.</p>
+      <div class="endpoint"><div class="line1"><span class="method">POST</span><span class="mono">/api/v1/auth/register</span></div><p>Create an account. Returns an access token and sets the refresh cookie.</p></div>
+      <div class="endpoint"><div class="line1"><span class="method">POST</span><span class="mono">/api/v1/auth/login</span></div><p>Email + password login.</p></div>
+      <div class="endpoint"><div class="line1"><span class="method">POST</span><span class="mono">/api/v1/auth/refresh</span></div><p>Rotates the refresh cookie, returns a new access token.</p></div>
+      <div class="endpoint"><div class="line1"><span class="method">POST</span><span class="mono">/api/v1/auth/logout</span></div><p>Revokes the current refresh token.</p></div>
+      <div class="endpoint"><div class="line1"><span class="method">POST</span><span class="mono">/api/v1/auth/oauth/github</span> · <span class="method">/oauth/google</span></div><p>Exchanges an OAuth code for a session, same token shape as login.</p></div>
+
+      <h2 id="tasks">Tasks</h2>
+      <div class="endpoint"><div class="line1"><span class="method">POST</span><span class="mono">/api/v1/tasks</span></div><p>Creates a task and queues it to Celery — this is what the Workspace composer calls.</p></div>
+      <div class="endpoint"><div class="line1"><span class="method">GET</span><span class="mono">/api/v1/tasks</span></div><p>List/filter/paginate — powers History. Supports <span class="mono">status</span>, <span class="mono">priority</span>, <span class="mono">language</span>, <span class="mono">search</span>, <span class="mono">page</span>.</p></div>
+      <div class="endpoint"><div class="line1"><span class="method">GET</span><span class="mono">/api/v1/tasks/{id}</span></div><p>Single task detail.</p></div>
+      <div class="endpoint"><div class="line1"><span class="method">PATCH / DELETE</span><span class="mono">/api/v1/tasks/{id}</span></div><p>Partial update, or delete.</p></div>
+
+      <h2 id="agents">Agents &amp; human approval</h2>
+      <p>The pipeline runs Guardrail → Planner → Grounding → Human → Identity Broker → Coder → Tester → Security → Reviewer → Context Curator. Anywhere Human sits, the Workspace pauses.</p>
+      <div class="endpoint"><div class="line1"><span class="method">GET</span><span class="mono">/api/v1/agents/runs/{task_id}</span></div><p>Every agent run for a task — status, timing, step counts.</p></div>
+      <div class="endpoint"><div class="line1"><span class="method">POST</span><span class="mono">/api/v1/agents/{task_id}/approve</span></div><p>Approve the current plan.</p></div>
+      <div class="endpoint"><div class="line1"><span class="method">POST</span><span class="mono">/api/v1/agents/{task_id}/reject</span></div><p>Reject with an optional reason — triggers a re-plan.</p></div>
+      <div class="endpoint"><div class="line1"><span class="method">POST</span><span class="mono">/api/v1/agents/{task_id}/edit-plan</span></div><p>Submit an edited plan; auto-approved on submit.</p></div>
+      <div class="endpoint"><div class="line1"><span class="method">POST</span><span class="mono">/api/v1/agents/{task_id}/add-role</span></div><p>Add a new agent role mid-run — the C3 dynamic-assignment feature.</p></div>
+      <div class="endpoint"><div class="line1"><span class="method">GET</span><span class="mono">/api/v1/agents/{task_id}/risk-score</span></div><p>Guardrail's running session risk score and verdict.</p></div>
+      <div class="endpoint"><div class="line1"><span class="method">GET</span><span class="mono">/api/v1/agents/{task_id}/grounding-report</span></div><p>Grounding's pass/fail and any unsupported claims.</p></div>
+      <div class="endpoint"><div class="line1"><span class="method">GET</span><span class="mono">/api/v1/agents/{task_id}/identity-token</span></div><p>Scope + expiry + tool-call log — never raw secrets.</p></div>
+      <div class="endpoint"><div class="line1"><span class="method">GET</span><span class="mono">/api/v1/agents/{task_id}/curated-memory</span></div><p>Items this task promoted into long-term project memory.</p></div>
+
+      <div class="callout"><b>Human-in-the-loop is not optional UI</b>Every approve/reject/edit/add-role call above pauses the LangGraph workflow at exactly that node until a response arrives — the frontend reflects backend state, it doesn't simulate agent progress on its own.</div>
+
+      <h2 id="outputs">Outputs</h2>
+      <div class="endpoint"><div class="line1"><span class="method">GET</span><span class="mono">/api/v1/tasks/{id}/outputs</span></div><p>Flat file list.</p></div>
+      <div class="endpoint"><div class="line1"><span class="method">GET</span><span class="mono">/api/v1/tasks/{id}/outputs/tree</span></div><p>Nested file-tree shape for Code Output's left pane.</p></div>
+      <div class="endpoint"><div class="line1"><span class="method">GET</span><span class="mono">/api/v1/tasks/{id}/outputs/{output_id}</span></div><p>Single file content.</p></div>
+      <div class="endpoint"><div class="line1"><span class="method">GET</span><span class="mono">/api/v1/tasks/{id}/outputs/download/zip</span></div><p>Every generated file, zipped.</p></div>
+
+      <h2 id="logs">Logs &amp; alerts</h2>
+      <div class="endpoint"><div class="line1"><span class="method">GET</span><span class="mono">/api/v1/tasks/{id}/logs</span></div><p>Filterable by agent, severity, resolved, search, since.</p></div>
+      <div class="endpoint"><div class="line1"><span class="method">PATCH</span><span class="mono">/api/v1/tasks/{id}/logs/{log_id}/resolve</span></div><p>Mark a log entry resolved.</p></div>
+      <div class="endpoint"><div class="line1"><span class="method">GET / POST / PATCH / DELETE</span><span class="mono">/api/v1/alert-rules</span></div><p>User-scoped alert rules — email or Slack.</p></div>
+
+      <h2 id="teams">Teams</h2>
+      <div class="endpoint"><div class="line1"><span class="method">GET / POST / PATCH / DELETE</span><span class="mono">/api/v1/teams</span></div><p>Team CRUD.</p></div>
+      <div class="endpoint"><div class="line1"><span class="method">GET / POST / PATCH / DELETE</span><span class="mono">/api/v1/teams/{id}/members</span></div><p>Invite, list, change role, remove.</p></div>
+      <div class="endpoint"><div class="line1"><span class="method">POST</span><span class="mono">/api/v1/teams/{id}/transfer-ownership</span></div><p>Owner-only.</p></div>
+
+      <h2 id="settings">Settings &amp; profile</h2>
+      <div class="endpoint"><div class="line1"><span class="method">GET</span><span class="mono">/api/v1/settings/sessions</span></div><p>Active sessions with device/IP info.</p></div>
+      <div class="endpoint"><div class="line1"><span class="method">DELETE</span><span class="mono">/api/v1/settings/sessions/{id}</span> · <span class="mono">/revoke-others</span></div><p>Revoke one or all other sessions.</p></div>
+      <div class="endpoint"><div class="line1"><span class="method">POST</span><span class="mono">/api/v1/settings/change-password</span></div><p></p></div>
+      <div class="endpoint"><div class="line1"><span class="method">PATCH</span><span class="mono">/api/v1/settings/two-factor</span></div><p></p></div>
+      <div class="endpoint"><div class="line1"><span class="method">GET / PATCH</span><span class="mono">/api/v1/profile</span></div><p>Name, bio, links, avatar.</p></div>
+
+      <h2 id="ws">WebSocket</h2>
+      <div class="endpoint"><div class="line1"><span class="method">WS</span><span class="mono">/ws/task/{task_id}</span></div><p>One connection per task, one Redis subscription per connection. Message shape: <span class="mono">{type: "log"|"event", agent, level, icon, message, timestamp}</span>.</p></div>
+      <p>The Workspace's activity feed and pipeline rail should key off <span class="mono">type: "event"</span> messages, not by parsing the human-readable log text.</p>
+
+      <h2 id="isolation">Data isolation</h2>
+      <div class="callout"><b>Every query is scoped to the requesting user</b>Tasks, projects, outputs, and logs are all fetched through <span class="mono">get_task(db, task_id, user_id=current_user.id)</span> — a task ID that belongs to someone else 404s the same way a nonexistent one does, so the frontend can't accidentally leak another account's data even if an ID is guessed. Team resources follow the same pattern through <span class="mono">get_team_with_membership</span>: you only ever see teams and projects you're actually a member of. The frontend's only job is to always send the current user's bearer token — it should never accept or construct another user's ID for a request.</div>
+
+    </div>
+  </div>
+
+</main>
+</div>
+
+<script src="assets/layout.js"></script>
+<script src="assets/app.js"></script>
+<script>
+  const tocLinks = document.querySelectorAll(".docs-toc-source a");
+  const sections = [...tocLinks].map(a => document.querySelector(a.getAttribute("href")));
+  document.addEventListener("scroll", () => {
+    let current = sections[0];
+    for (const s of sections) if (s.getBoundingClientRect().top < 140) current = s;
+    tocLinks.forEach(a => a.classList.toggle("is-active", a.getAttribute("href") === "#" + current.id));
+  });
+</script>
+</body>
+</html>

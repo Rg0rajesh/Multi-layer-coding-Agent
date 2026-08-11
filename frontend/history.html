@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agent X — History</title>
+  <link rel="stylesheet" href="css/theme.css" />
+  <link rel="stylesheet" href="css/sidebar.css" />
+  <link rel="stylesheet" href="css/history.css" />
+  <link rel="stylesheet" href="css/status-pill.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <div id="sidebar-root"></div>
+    <main class="app-main">
+      <div class="page-header">
+        <div>
+          <h1>History</h1>
+          <p class="page-header__meta" id="result-count">Loading tasks…</p>
+        </div>
+      </div>
+
+      <div class="history__toolbar">
+        <input type="text" id="search" placeholder="Search tasks…" class="history__search" />
+        <select id="status-filter" class="history__filter">
+          <option value="">All statuses</option>
+          <option value="completed">Completed</option>
+          <option value="failed">Failed</option>
+          <option value="running">Running</option>
+        </select>
+      </div>
+
+      <p class="history__status-text" id="status-text"></p>
+
+      <div class="history__list" id="history-list"></div>
+
+      <div class="history__pagination">
+        <button id="prev-page" class="btn btn--outline" disabled>Previous</button>
+        <span id="page-indicator" class="history__page-indicator">Page 1</span>
+        <button id="next-page" class="btn btn--outline" disabled>Next</button>
+      </div>
+    </main>
+  </div>
+
+  <script src="js/config.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/shell.js"></script>
+  <script src="js/history.js"></script>
+</body>
+</html>

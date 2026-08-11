@@ -1,0 +1,40 @@
+/* frontend/src/components/Logo.css */
+
+.logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.logo__mark {
+  width: var(--logo-size);
+  height: var(--logo-size);
+  object-fit: contain;
+  display: block;
+}
+
+/* Deliberately looks unfinished — a dashed box, not a convincing fake
+   mark. See the comment in Logo.tsx before changing this. */
+.logo__placeholder {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--logo-size);
+  height: var(--logo-size);
+  border: 1px dashed var(--text-tertiary);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: calc(var(--logo-size) * 0.4);
+  font-weight: 700;
+  color: var(--text-tertiary);
+  letter-spacing: 0.02em;
+}
+
+.logo__wordmark {
+  font-family: "Mochesa", var(--font-heading), Georgia, serif;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--text);
+  white-space: nowrap;
+}

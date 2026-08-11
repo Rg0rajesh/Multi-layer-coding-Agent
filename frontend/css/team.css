@@ -1,0 +1,54 @@
+.team__tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.team__tab {
+  padding: 10px 16px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-secondary);
+  font-size: 0.86rem;
+  cursor: pointer;
+}
+
+.team__tab.is-active {
+  border-bottom-color: var(--text);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.team__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.86rem;
+}
+
+.team__table th {
+  text-align: left;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-strong);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.team__table td {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.team__role {
+  text-transform: capitalize;
+}
+
+.team__role--owner {
+  font-weight: 700;
+}
+
+.team__role--viewer {
+  color: var(--text-secondary);
+}

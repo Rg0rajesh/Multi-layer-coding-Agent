@@ -1,0 +1,68 @@
+.log-stream {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  height: 100%;
+  overflow-y: auto;
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  line-height: 1.7;
+}
+
+.log-stream--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+
+.log-line {
+  display: flex;
+  gap: 10px;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.log-line__time {
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.log-line__agent {
+  flex-shrink: 0;
+  min-width: 9ch;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.log-line__mark {
+  flex-shrink: 0;
+  width: 1ch;
+}
+
+.log-line__message {
+  color: var(--text-secondary);
+}
+
+/* Severity — weight and glyph only, never hue */
+.log-line--pass .log-line__message,
+.log-line--done .log-line__message {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.log-line--warn .log-line__message {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.log-line--error .log-line__message {
+  color: var(--text);
+  font-weight: 700;
+}

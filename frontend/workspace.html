@@ -1,0 +1,504 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Workspace — AGENT X</title>
+<link rel="stylesheet" href="assets/theme.css">
+<style>
+  body{ overflow: hidden; }
+  .app-shell{ padding-top: var(--nav-h); height: 100vh; }
+  .main-col{ margin-left: var(--sidebar-w); display:flex; padding:0; height: calc(100vh - var(--nav-h)); }
+  @media (max-width: 900px){ .main-col{ margin-left:0; } }
+
+  /* ---- left: agent list (who is on this task) ---- */
+  .agent-list-col{ width: 250px; flex-shrink:0; border-right: 1px solid var(--border); padding: 16px 12px; overflow-y:auto; }
+  @media (max-width: 1150px){ .agent-list-col{ display:none; } }
+  .agent-list-col h4{ font-size:11px; text-transform:uppercase; letter-spacing:.08em; color: var(--text-dim); margin-bottom:12px; }
+  .agent-list-item{ display:flex; align-items:center; gap:10px; padding: 9px 6px; border-radius: var(--radius); }
+  .agent-list-item .info{ flex:1; min-width:0; }
+  .agent-list-item .name{ font-size:12.5px; font-weight:600; }
+  .agent-list-item .state{ font-size:11px; color: var(--text-dim); }
+  .agent-list-item.is-current{ background: var(--surface); }
+  .agent-list-item.needs-human .state{ color: var(--text); font-weight:600; }
+  .state-ring{ width:7px; height:7px; border-radius:50%; border:1px solid var(--text-dim); flex-shrink:0; }
+  .state-ring.working{ background: var(--text); border-color: var(--text); animation: pulse 1.4s ease-in-out infinite; }
+  .state-ring.completed{ background: var(--text); border-color: var(--text); }
+  .state-ring.waiting_human{ border: 2px solid var(--text); }
+  @keyframes pulse{ 0%,100%{opacity:1} 50%{opacity:.3} }
+
+  /* ---- center: conversation ---- */
+  .chat-col{ flex:1; min-width:0; display:flex; flex-direction:column; position:relative; }
+  .chat-scroll{ flex:1; overflow-y:auto; padding: 24px 20px 24px; }
+  .chat-inner{ max-width: 720px; margin:0 auto; display:flex; flex-direction:column; gap:18px; padding-bottom: 110px; }
+
+  .msg-human{ display:flex; flex-direction:column; gap:4px; }
+  .msg-human .who{ font-size:12px; font-weight:700; color: var(--text-dim); }
+  .msg-human .content{ font-size: 15px; }
+
+  .msg-agentx{ display:flex; flex-direction:column; gap:6px; }
+  .msg-agentx .who{ display:flex; align-items:center; gap:8px; font-size:12px; font-weight:700; color: var(--text-dim); }
+  .msg-agentx .content{ font-size: 14.5px; line-height:1.65; color: var(--text-secondary); }
+  .msg-agentx .content b{ color: var(--text); font-weight:600; }
+  .msg-agentx .content ol, .msg-agentx .content ul{ margin: 8px 0; padding-left: 20px; }
+  .msg-agentx .content li{ margin-bottom:4px; }
+
+  .activity-card{ margin-top:6px; border:1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+  .activity-card summary{ list-style:none; cursor:pointer; padding: 10px 14px; font-size:13px; color: var(--text-secondary); display:flex; align-items:center; gap:8px; }
+  .activity-card summary::-webkit-details-marker{ display:none; }
+  .activity-card summary .icon-slot{ width:11px; height:11px; }
+  .activity-card .body{ padding: 0 14px 12px; border-top:1px solid var(--border); padding-top:10px; font-size:12.5px; color: var(--text-secondary); }
+  .activity-card .body .checkline{ display:flex; align-items:center; gap:8px; padding: 3px 0; }
+  .activity-card .body .checkline .icon-slot{ width:12px; height:12px; }
+
+  /* ---- human decision panels ---- */
+  .decision-card{ margin-top:8px; border: 2px solid var(--text); border-radius: var(--radius-lg); padding:16px 18px; }
+  .decision-card .kicker{ font-size:11px; text-transform:uppercase; letter-spacing:.08em; color: var(--text-dim); margin-bottom:6px; }
+  .decision-card h4{ margin: 0 0 10px; font-size: 14.5px; }
+  .decision-card p{ font-size:13px; margin: 0 0 12px; }
+  .decision-card ul.files{ list-style:none; padding:0; margin: 0 0 14px; font-family: var(--font-mono); font-size:12.5px; }
+  .decision-card ul.files li{ padding: 3px 0; }
+  .decision-actions{ display:flex; gap:8px; flex-wrap:wrap; }
+  .option-row{ display:flex; gap:8px; flex-wrap:wrap; margin-bottom: 12px; }
+  .option-btn{ padding: 9px 16px; border-radius: var(--radius-pill); border:1px solid var(--border-strong); background:transparent; font-size:13px; cursor:pointer; color: var(--text); }
+  .option-btn:hover{ background: var(--surface); }
+  .custom-response{ display:flex; gap:8px; margin-top:6px; }
+  .custom-response input{ flex:1; height:38px; padding:0 12px; border:1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); font-size:13px; }
+  .decision-resolved{ font-size:13px; }
+  .decision-resolved .kicker{ margin-bottom:2px; }
+
+  .paused-banner{ display:flex; align-items:center; gap:8px; font-size:12px; color: var(--text-dim); margin: 4px 0 2px; }
+  .paused-banner .icon-slot{ width:12px; height:12px; }
+
+  .typing-dots{ display:inline-flex; gap:3px; }
+  .typing-dots span{ width:5px; height:5px; border-radius:50%; background: var(--text-dim); animation: bounce 1.1s infinite ease-in-out; }
+  .typing-dots span:nth-child(2){ animation-delay:.15s } .typing-dots span:nth-child(3){ animation-delay:.3s }
+  @keyframes bounce{ 0%,80%,100%{ transform: translateY(0); opacity:.4 } 40%{ transform: translateY(-3px); opacity:1 } }
+
+  /* ---- composer ---- */
+  .composer{ position:absolute; left:0; right:0; bottom:0; padding: 14px 20px 20px; background: linear-gradient(to top, var(--bg) 65%, transparent); }
+  .composer-inner{ max-width: 720px; margin:0 auto; }
+  .composer-box{ display:flex; align-items:flex-end; gap:10px; padding: 10px 10px 10px 16px; border: 1px solid var(--border-strong); border-radius: 20px; background: var(--surface); box-shadow: var(--shadow-card); }
+  .composer-box textarea{ flex:1; border:none; background:transparent; resize:none; color: var(--text); font-family: inherit; font-size: 14.5px; line-height:1.5; max-height: 160px; padding: 6px 0; }
+  .composer-box textarea:focus{ outline:none; }
+  .composer-tools{ display:flex; align-items:center; gap:4px; }
+  .composer-send{ width:36px; height:36px; border-radius:50%; background: var(--fill); color: var(--fill-text); border:none; display:grid; place-items:center; cursor:pointer; flex-shrink:0; }
+  .composer-send:disabled{ opacity:.35; cursor:default; }
+  .composer-hint{ text-align:center; font-size:11px; color: var(--text-dim); margin-top:8px; }
+
+  /* ---- right: task status / pipeline / activity ---- */
+  .status-col{ width: 300px; flex-shrink:0; border-left: 1px solid var(--border); padding: 18px 16px; overflow-y:auto; }
+  @media (max-width: 1150px){
+    .status-col{ position: fixed; top: var(--nav-h); right:0; bottom:0; background: var(--bg); z-index: 80; transform: translateX(100%); width: 300px; }
+    .status-col.is-open{ transform: translateX(0); box-shadow: -10px 0 30px rgba(0,0,0,.15); }
+  }
+  .status-block{ margin-bottom: 22px; }
+  .status-block h4{ font-size:11px; text-transform:uppercase; letter-spacing:.08em; color: var(--text-dim); margin-bottom:10px; }
+  .kv-row{ display:flex; justify-content:space-between; font-size:12.5px; padding: 5px 0; }
+  .pipeline-mini{ display:flex; flex-direction:column; gap:2px; }
+  .pipeline-mini-row{ display:flex; align-items:center; gap:8px; padding: 6px 0; border-bottom:1px solid var(--border); font-size:12px; }
+  .pipeline-mini-row:last-child{ border-bottom:none; }
+  .pipeline-mini-row .name{ flex:1; }
+  .activity-log{ font-family: var(--font-mono); font-size:11.5px; color: var(--text-secondary); line-height:1.8; }
+  .scope-tag{ font-family: var(--font-mono); font-size:11px; background: var(--surface-2); padding: 2px 7px; border-radius:5px; margin: 2px 4px 0 0; display:inline-block; }
+</style>
+</head>
+<body data-page="workspace">
+
+<div id="app-nav"></div>
+<div id="app-sidebar"></div>
+
+<div class="app-shell">
+<main class="main-col">
+
+  <!-- LEFT: agent list -->
+  <div class="agent-list-col">
+    <h4>Agents on this task</h4>
+    <div id="agent-list"></div>
+  </div>
+
+  <!-- CENTER: conversation -->
+  <div class="chat-col">
+    <div class="chat-scroll" id="chat-scroll">
+      <div class="chat-inner" id="chat-inner">
+        <div class="msg-agentx fade-in-up">
+          <div class="who"><span class="agent-mark shape-circle style-outline" style="width:20px;height:20px;"></span>AGENTX</div>
+          <div class="content">I'm ready. Describe a software task and I'll bring in whichever agents it needs — Planner, Coder, Tester, Reviewer, and the rest. I'll pause and ask you whenever a decision needs your input.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="composer">
+      <div class="composer-inner">
+        <div class="composer-box">
+          <textarea id="composer-input" rows="1" placeholder="Ask AGENTX…"></textarea>
+          <div class="composer-tools">
+            <button class="icon-btn" title="Attach file"><span class="icon-slot"></span></button>
+            <button class="composer-send" id="composer-send" disabled title="Send"><span class="icon-slot"></span></button>
+          </div>
+        </div>
+        <p class="composer-hint">AGENTX pauses for your approval before any code is written or shipped</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT: task status / pipeline / activity -->
+  <aside class="status-col" id="status-col">
+    <div class="status-block">
+      <h4>Current task</h4>
+      <div class="kv-row"><span class="text-secondary">Task</span><span id="status-task-id" class="mono">—</span></div>
+      <div class="kv-row"><span class="text-secondary">Current agent</span><span id="status-current-agent">—</span></div>
+      <div class="kv-row"><span class="text-secondary">Progress</span><span id="status-progress">0%</span></div>
+      <div class="progress-track" style="width:100%; margin-top:6px;"><div class="progress-fill" id="status-progress-bar" style="width:0%"></div></div>
+    </div>
+    <div class="status-block">
+      <h4>Pipeline</h4>
+      <div class="pipeline-mini" id="pipeline-mini"></div>
+    </div>
+    <div class="status-block">
+      <h4>Guardrail — risk</h4>
+      <div class="kv-row"><span class="text-secondary">Running score</span><span class="mono" id="risk-score">— / 100</span></div>
+    </div>
+    <div class="status-block">
+      <h4>Identity Broker — scope</h4>
+      <div id="scope-tags"><span class="text-dim" style="font-size:12px;">Not yet issued for this task.</span></div>
+    </div>
+    <div class="status-block">
+      <h4>Recent activity</h4>
+      <div class="activity-log" id="activity-log">Waiting for a task…</div>
+    </div>
+  </aside>
+
+</main>
+</div>
+
+<script src="assets/layout.js"></script>
+<script src="assets/app.js"></script>
+<script>
+// -----------------------------------------------------------------------
+// Demo-mode pipeline simulation. This drives the UI the same way real
+// backend events would over /ws/task/{id} (task_started, agent_started,
+// agent_progress, agent_completed, human_approval_required, ...). Swap
+// runStep()/wait() for a real WebSocket handler to go live — the rendering
+// functions below (appendX, renderAgentList, renderPipeline) don't need to
+// change, they just react to state.
+// -----------------------------------------------------------------------
+
+const AGENTS = [
+  { key:"guardrail", name:"Guardrail",       role:"Adversarial defense",  shape:"shape-diamond style-outline style-bold" },
+  { key:"planner",   name:"Planner",         role:"Task decomposition",   shape:"shape-circle style-dashed" },
+  { key:"grounding", name:"Grounding",       role:"Repo-state check",     shape:"shape-square style-double" },
+  { key:"human",     name:"Human",           role:"Approval checkpoint",  shape:"shape-circle style-filled" },
+  { key:"identity",  name:"Identity Broker", role:"Scoped credential",    shape:"shape-diamond style-dotted" },
+  { key:"coder",     name:"Coder",           role:"Implementation",       shape:"shape-square style-filled" },
+  { key:"tester",    name:"Tester",          role:"pytest execution",     shape:"shape-circle style-filled size-sm" },
+  { key:"security",  name:"Security",        role:"Bandit + Semgrep",     shape:"shape-square style-outline style-bold" },
+  { key:"reviewer",  name:"Reviewer",        role:"Quality score",        shape:"shape-square style-dashed" },
+  { key:"curator",   name:"Context Curator", role:"Long-term memory",     shape:"shape-diamond style-filled" },
+];
+const STATES = { IDLE:"idle", WORKING:"working", WAITING:"waiting_human", DONE:"completed" };
+
+let agentState = AGENTS.map(() => STATES.IDLE);
+let currentIndex = -1;
+
+const chatInner = document.getElementById("chat-inner");
+const chatScroll = document.getElementById("chat-scroll");
+const input = document.getElementById("composer-input");
+const sendBtn = document.getElementById("composer-send");
+
+document.getElementById("rail-toggle-btn")?.addEventListener("click", () =>
+  document.getElementById("status-col").classList.toggle("is-open"));
+
+function nowStr(){ return new Date().toTimeString().slice(0,8); }
+function scrollDown(){ chatScroll.scrollTop = chatScroll.scrollHeight; }
+function mark(a, size){ return `<span class="agent-mark ${a.shape}" style="width:${size||20}px;height:${size||20}px;"></span>`; }
+
+function renderAgentList(){
+  const list = document.getElementById("agent-list");
+  list.innerHTML = AGENTS.map((a,i) => {
+    const state = agentState[i];
+    const label = { idle:"Idle", working:"Working", waiting_human:"Waiting for you", completed:"Completed" }[state];
+    return `<div class="agent-list-item ${i===currentIndex ? "is-current":""} ${state==="waiting_human"?"needs-human":""}">
+      ${mark(a,26)}
+      <div class="info"><div class="name">${a.name}</div><div class="state">${label}</div></div>
+      <span class="state-ring ${state}"></span>
+    </div>`;
+  }).join("");
+}
+renderAgentList();
+
+function renderPipeline(){
+  const el = document.getElementById("pipeline-mini");
+  el.innerHTML = AGENTS.map((a,i) => {
+    const state = agentState[i];
+    const label = { idle:"queued", working:"running", waiting_human:"needs you", completed:"done" }[state];
+    return `<div class="pipeline-mini-row">${mark(a,18)}<span class="name">${a.name}</span><span class="text-dim mono">${label}</span></div>`;
+  }).join("");
+  const done = agentState.filter(s => s === STATES.DONE).length;
+  document.getElementById("status-progress").textContent = Math.round((done/AGENTS.length)*100) + "%";
+  document.getElementById("status-progress-bar").style.width = Math.round((done/AGENTS.length)*100) + "%";
+  document.getElementById("status-current-agent").textContent = currentIndex >= 0 ? AGENTS[currentIndex].name : "—";
+}
+renderPipeline();
+
+function logActivity(text){
+  const el = document.getElementById("activity-log");
+  const line = `${nowStr()} ${text}`;
+  el.innerHTML = (el.textContent === "Waiting for a task…" ? "" : el.innerHTML + "<br>") + line;
+  el.scrollTop = el.scrollHeight;
+}
+
+function appendHuman(text){
+  const el = document.createElement("div");
+  el.className = "msg-human fade-in-up";
+  el.innerHTML = `<div class="who">Human</div><div class="content">${escapeHtml(text)}</div>`;
+  chatInner.appendChild(el); scrollDown();
+}
+
+function appendAgentX(agent, html, extraHTML){
+  const el = document.createElement("div");
+  el.className = "msg-agentx fade-in-up";
+  el.innerHTML = `
+    <div class="who">${mark(agent,20)}${agent.name === "AGENTX" ? "AGENTX" : agent.name.toUpperCase()}</div>
+    <div class="content">${html}${extraHTML || ""}</div>`;
+  chatInner.appendChild(el); scrollDown();
+  return el;
+}
+
+function appendTyping(agent){
+  const el = document.createElement("div");
+  el.className = "msg-agentx fade-in-up";
+  el.innerHTML = `<div class="who">${mark(agent,20)}${agent.name.toUpperCase()}</div><div class="content"><span class="typing-dots"><span></span><span></span><span></span></span></div>`;
+  chatInner.appendChild(el); scrollDown();
+  return el;
+}
+
+function activityCard(title, checklines){
+  return `<details class="activity-card"><summary><span class="icon-slot"></span>${title}</summary>
+    <div class="body">${checklines.map(l => `<div class="checkline"><span class="icon-slot"></span>${l}</div>`).join("")}</div>
+  </details>`;
+}
+
+function escapeHtml(s){ const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+function wait(ms){ return new Promise(r => setTimeout(r, ms)); }
+
+async function setAgentState(i, state){
+  agentState[i] = state;
+  currentIndex = (state === STATES.WORKING || state === STATES.WAITING) ? i : currentIndex;
+  renderAgentList(); renderPipeline();
+}
+
+// ---- Human-in-the-loop panel builders --------------------------------
+
+function approvalPanel(el, { kicker, title, description, files, onApprove, onReject }){
+  el.querySelector(".content").insertAdjacentHTML("beforeend", `
+    <div class="decision-card" data-role="decision">
+      <div class="kicker">${kicker}</div>
+      <h4>${title}</h4>
+      ${description ? `<p>${description}</p>` : ""}
+      ${files ? `<ul class="files">${files.map(f => `<li>${f}</li>`).join("")}</ul>` : ""}
+      <div class="decision-actions">
+        <button class="btn btn-primary btn-sm" data-act="approve">Approve</button>
+        <button class="btn btn-ghost btn-sm" data-act="reject">Reject</button>
+      </div>
+    </div>`);
+  const card = el.querySelector('[data-role="decision"]');
+  return new Promise(resolve => {
+    card.querySelector('[data-act="approve"]').addEventListener("click", () => { resolve("approved"); finalize(card, "Approved."); onApprove?.(); });
+    card.querySelector('[data-act="reject"]').addEventListener("click", () => { resolve("rejected"); finalize(card, "Rejected."); onReject?.(); });
+  });
+}
+
+function planPanel(el, { title, steps }){
+  el.querySelector(".content").insertAdjacentHTML("beforeend", `
+    <div class="decision-card" data-role="decision">
+      <div class="kicker">Plan review</div>
+      <h4>${title}</h4>
+      <ol>${steps.map(s => `<li>${s}</li>`).join("")}</ol>
+      <div class="decision-actions">
+        <button class="btn btn-primary btn-sm" data-act="approve">Approve plan</button>
+        <button class="btn btn-outline btn-sm" data-act="edit">Edit plan</button>
+        <button class="btn btn-ghost btn-sm" data-act="reject">Reject</button>
+      </div>
+    </div>`);
+  const card = el.querySelector('[data-role="decision"]');
+  return new Promise(resolve => {
+    card.querySelector('[data-act="approve"]').addEventListener("click", () => { finalize(card, "Plan approved."); resolve("approved"); });
+    card.querySelector('[data-act="reject"]').addEventListener("click", () => { finalize(card, "Plan rejected — Planner will revise."); resolve("rejected"); });
+    card.querySelector('[data-act="edit"]').addEventListener("click", () => {
+      card.querySelector(".decision-actions").insertAdjacentHTML("beforebegin",
+        `<div class="custom-response"><input type="text" placeholder="Describe the change…" data-edit-input><button class="btn btn-outline btn-sm" data-act="submit-edit">Submit</button></div>`);
+      card.querySelector('[data-act="submit-edit"]').addEventListener("click", () => {
+        const val = card.querySelector("[data-edit-input]").value || "unspecified change";
+        finalize(card, `Plan edited: "${escapeHtml(val)}" — re-approved.`);
+        resolve("edited");
+      });
+    });
+  });
+}
+
+function clarificationPanel(el, { question, options }){
+  el.querySelector(".content").insertAdjacentHTML("beforeend", `
+    <div class="decision-card" data-role="decision">
+      <div class="kicker">Clarification needed</div>
+      <h4>${question}</h4>
+      <div class="option-row">${options.map(o => `<button class="option-btn" data-opt="${escapeHtml(o)}">${o}</button>`).join("")}</div>
+      <div class="custom-response"><input type="text" placeholder="Or tell AGENTX what to do…" data-custom-input><button class="btn btn-outline btn-sm" data-act="submit-custom">Submit</button></div>
+    </div>`);
+  const card = el.querySelector('[data-role="decision"]');
+  return new Promise(resolve => {
+    card.querySelectorAll("[data-opt]").forEach(btn => {
+      btn.addEventListener("click", () => { finalize(card, `Selected: ${btn.dataset.opt}.`); resolve(btn.dataset.opt); });
+    });
+    card.querySelector('[data-act="submit-custom"]').addEventListener("click", () => {
+      const val = card.querySelector("[data-custom-input]").value || "no answer given";
+      finalize(card, `Instruction: "${escapeHtml(val)}"`);
+      resolve(val);
+    });
+  });
+}
+
+function addAgentPanel(el, { reason, agentName }){
+  el.querySelector(".content").insertAdjacentHTML("beforeend", `
+    <div class="decision-card" data-role="decision">
+      <div class="kicker">Add a role?</div>
+      <h4>${reason}</h4>
+      <div class="decision-actions">
+        <button class="btn btn-primary btn-sm" data-act="add">Add ${agentName}</button>
+        <button class="btn btn-ghost btn-sm" data-act="skip">Continue without it</button>
+      </div>
+    </div>`);
+  const card = el.querySelector('[data-role="decision"]');
+  return new Promise(resolve => {
+    card.querySelector('[data-act="add"]').addEventListener("click", () => { finalize(card, `${agentName} added to the pipeline.`); resolve(true); });
+    card.querySelector('[data-act="skip"]').addEventListener("click", () => { finalize(card, "Continuing without it."); resolve(false); });
+  });
+}
+
+function finalize(card, resolutionText){
+  card.innerHTML = `<div class="decision-resolved"><div class="kicker">Resolved</div>${resolutionText}</div>`;
+  scrollDown();
+}
+
+// ---- Composer -----------------------------------------------------------
+
+input.addEventListener("input", () => {
+  input.style.height = "auto";
+  input.style.height = Math.min(input.scrollHeight, 160) + "px";
+  sendBtn.disabled = input.value.trim().length === 0;
+});
+input.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (!sendBtn.disabled) submitTask(); }
+});
+sendBtn.addEventListener("click", submitTask);
+
+// ---- Pipeline run (demo) --------------------------------------------
+
+async function submitTask(){
+  const description = input.value.trim();
+  if (!description) return;
+  input.value = ""; input.style.height = "auto"; sendBtn.disabled = true;
+
+  appendHuman(description);
+  const taskId = "#" + Math.random().toString(16).slice(2, 7).toUpperCase();
+  document.getElementById("status-task-id").textContent = taskId;
+  document.getElementById("nav-task-label").textContent = "task " + taskId;
+  agentState = AGENTS.map(() => STATES.IDLE);
+  logActivity("task_started — " + taskId);
+
+  const idx = { guardrail:0, planner:1, grounding:2, human:3, identity:4, coder:5, tester:6, security:7, reviewer:8, curator:9 };
+
+  // Guardrail
+  await setAgentState(idx.guardrail, STATES.WORKING);
+  { const t = appendTyping(AGENTS[idx.guardrail]); await wait(500); t.remove();
+    const risk = Math.floor(Math.random()*30)+5;
+    document.getElementById("risk-score").textContent = risk + " / 100";
+    appendAgentX(AGENTS[idx.guardrail], `Screened the request — <b>risk ${risk}/100, allow</b>. Handing off to Planner.`);
+    logActivity("agent_completed — guardrail (allow)"); }
+  await setAgentState(idx.guardrail, STATES.DONE);
+
+  // Planner
+  await setAgentState(idx.planner, STATES.WORKING);
+  const steps = [
+    "Add POST /auth/refresh route handler",
+    "Validate + rotate refresh token in auth_service.py",
+    "Write unit tests for rotation edge cases",
+    "Update OpenAPI schema for the new endpoint",
+  ];
+  { const t = appendTyping(AGENTS[idx.planner]); await wait(700); t.remove();
+    appendAgentX(AGENTS[idx.planner], `I've broken this into <b>${steps.length} steps</b>.`,
+      activityCard("View reasoning summary", [
+        "Repo already uses SHA-256 for refresh-token hashing — reusing that convention",
+        "No existing /auth/refresh route — this is additive, not a rewrite",
+      ]));
+    logActivity("plan_created — 4 subtasks"); }
+  await setAgentState(idx.planner, STATES.DONE);
+
+  // Grounding
+  await setAgentState(idx.grounding, STATES.WORKING);
+  { const t = appendTyping(AGENTS[idx.grounding]); await wait(500); t.remove();
+    appendAgentX(AGENTS[idx.grounding], `Checked the plan against the actual repo state — <b>grounded</b>, no unsupported claims.`);
+    logActivity("agent_completed — grounding (grounded)"); }
+  await setAgentState(idx.grounding, STATES.DONE);
+
+  // Human — plan approval
+  await setAgentState(idx.human, STATES.WAITING);
+  logActivity("human_approval_required — plan");
+  { const el = appendAgentX(AGENTS[idx.planner], `Here's the plan — take a look before I bring in Coder.`);
+    el.querySelector(".content").insertAdjacentHTML("afterbegin", `<div class="paused-banner"><span class="icon-slot"></span>Execution paused — waiting on you</div>`);
+    await planPanel(el, { title: "Implementation plan", steps }); }
+  await setAgentState(idx.human, STATES.DONE);
+
+  // Identity Broker
+  await setAgentState(idx.identity, STATES.WORKING);
+  { const t = appendTyping(AGENTS[idx.identity]); await wait(500); t.remove();
+    const scopes = ["file_read", "file_write", "pytest"];
+    document.getElementById("scope-tags").innerHTML = scopes.map(s => `<span class="scope-tag">${s}</span>`).join("");
+    appendAgentX(AGENTS[idx.identity], `Issued a scoped, short-lived credential — <b>${scopes.length} tools</b>, expires in 15 min.`);
+    logActivity("identity_token_issued — scope: " + scopes.join(",")); }
+  await setAgentState(idx.identity, STATES.DONE);
+
+  // Coder
+  await setAgentState(idx.coder, STATES.WORKING);
+  { const t = appendTyping(AGENTS[idx.coder]); await wait(900); t.remove();
+    appendAgentX(AGENTS[idx.coder], `Implementation written — <b>2 files, 84 lines</b>.`,
+      activityCard("View files changed", [
+        "routers/auth.py — modified, +41 lines",
+        "services/auth_service.py — modified, +18 lines",
+      ]));
+    logActivity("code_generated — 2 files"); }
+  await setAgentState(idx.coder, STATES.DONE);
+
+  // Tester
+  await setAgentState(idx.tester, STATES.WORKING);
+  { const t = appendTyping(AGENTS[idx.tester]); await wait(800); t.remove();
+    appendAgentX(AGENTS[idx.tester], `<b>12/12 tests passed.</b> Passing to Security.`);
+    logActivity("tests_completed — 12/12 passed"); }
+  await setAgentState(idx.tester, STATES.DONE);
+
+  // Security
+  await setAgentState(idx.security, STATES.WORKING);
+  { const t = appendTyping(AGENTS[idx.security]); await wait(700); t.remove();
+    appendAgentX(AGENTS[idx.security], `Clean scan — <b>0 blocking issues</b>.`);
+    logActivity("agent_completed — security (clean)"); }
+  await setAgentState(idx.security, STATES.DONE);
+
+  // Reviewer
+  await setAgentState(idx.reviewer, STATES.WORKING);
+  { const t = appendTyping(AGENTS[idx.reviewer]); await wait(700); t.remove();
+    appendAgentX(AGENTS[idx.reviewer], `Score <b>8.9/10 — approved</b>. Consider logging rotation events for the audit trail (non-blocking).`);
+    logActivity("review_completed — score 8.9"); }
+  await setAgentState(idx.reviewer, STATES.DONE);
+
+  // Context Curator
+  await setAgentState(idx.curator, STATES.WORKING);
+  { const t = appendTyping(AGENTS[idx.curator]); await wait(600); t.remove();
+    appendAgentX(AGENTS[idx.curator], `Promoted <b>1 item</b> to long-term project memory: refresh-token rotation now uses SHA-256.`);
+    logActivity("task_completed — " + taskId);
+    appendAgentX({ name:"AGENTX", shape:"shape-circle style-outline" },
+      `Done — everything's in <a href="code-output.html" style="text-decoration:underline;">Code Output</a> if you want the full diff.`); }
+  await setAgentState(idx.curator, STATES.DONE);
+}
+</script>
+</body>
+</html>
