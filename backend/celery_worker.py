@@ -11,7 +11,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 from datetime import datetime, timezone
+from pathlib import Path
+
+# Ensure local backend modules can be imported even when Celery starts from a
+# working directory that does not already include /app.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from celery import Celery
 from celery.signals import worker_process_init

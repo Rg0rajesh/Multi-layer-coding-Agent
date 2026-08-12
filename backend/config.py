@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Any
+from typing import Annotated
 
 from pydantic import field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -19,25 +19,12 @@ class Settings(BaseSettings):
     ollama_url: str = "http://localhost:11434"
     chroma_url: str = "http://localhost:8001"
 
-    # Model tags live here, not hardcoded in each agent file — swapping back
-    # to 7B on a stronger machine later is a one-line .env change this way.
     ollama_model: str = "qwen2.5-coder:3b"
-
-    # Guardrail (C9) classifier. Defaults to the 1b tag — the 8b variant needs
-    # ~6-7GB RAM on its own, which doesn't leave room for the coder model and
-    # the rest of the stack on a typical laptop. Same taxonomy either way;
-    # bump to "llama-guard3:8b" via .env once you're on beefier hardware.
     llama_guard_model: str = "llama-guard3:1b"
 
-    # How long we'll wait on a single Ollama /api/chat call before giving up,
-    # and how many of those calls can be in flight at once. Ollama serializes
-    # requests against one loaded model anyway, so this semaphore mostly
-    # exists to keep a burst of Celery workers from all queuing up at once
-    # and each hitting their own timeout simultaneously.
     ollama_timeout_seconds: float = 120.0
     ollama_max_concurrent_requests: int = 2
 
-    # governance (C7) — Identity Broker's policy engine
     opa_url: str = "http://localhost:8181"
 
     # auth
@@ -45,14 +32,6 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 30
-
-    # Refresh-token cookie's Secure flag. Defaults to True (browsers won't
-    # set or send it over plain HTTP) because that's the right default for
-    # anything with a real hostname. nginx.conf as shipped only listens on
-    # :80 with no TLS termination configured — set this to false in .env
-    # for local/plain-HTTP deployments, or terminate TLS at nginx and leave
-    # it on for anything that isn't just localhost (which browsers already
-    # treat as a secure context regardless of this flag).
     cookie_secure: bool = True
 
     # oauth
@@ -61,15 +40,15 @@ class Settings(BaseSettings):
     google_client_id: str | None = None
     google_client_secret: str | None = None
 
-    # notifications (optional in dev)
+    # notifications
     sendgrid_api_key: str | None = None
     slack_webhook_url: str | None = None
 
-    # CORS — comma-separated in .env, e.g.
-    # CORS_ORIGINS=https://app.agentx.dev,https://staging.agentx.dev
-    # Typed as Any so pydantic-settings won't try json.loads() on the raw
-    # env string; the validator below handles comma-separated → list conversion.
-    cors_origins: Any = ["http://localhost:3000"]
+    # CORS — comma-separated in .env (e.g. "http://a.com,http://b.com") or a
+    # JSON array. `NoDecode` stops pydantic-settings from trying to
+    # json.loads() the raw env string itself — that was crashing the app
+    # before our validator below ever got a chance to run.
+    cors_origins: Annotated[list[str], NoDecode] = ["http://localhost:3000"]
 
     @field_validator("cors_origins", mode="before")
     @classmethod
@@ -85,7 +64,6 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    # cached so we don't re-parse the .env on every request
     return Settings()
 
 

@@ -1,4 +1,3 @@
-# docker-compose.yml
 name: agentx
 
 networks:
@@ -6,23 +5,23 @@ networks:
     driver: bridge
 
 volumes:
-  postgres_data:
   redis_data:
   ollama_data:
   chroma_data:
   opa_data:
+  postgres_data:
 
 services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
-    env_file: .env
     environment:
-      POSTGRES_DB: agentx_db
       POSTGRES_USER: agentx
+      POSTGRES_PASSWORD: agentx_dev_pw_2026
+      POSTGRES_DB: agentx_db
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./database/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
     ports: ["5432:5432"]
     networks: [agentx-net]
     healthcheck:
@@ -55,24 +54,29 @@ services:
       timeout: 5s
       retries: 5
 
-  # Pulls all three models once on first boot. Guardrail uses the 1b tag
-  # deliberately — the bare "llama-guard3" tag defaults to 8b (~4.9GB,
-  # needs ~6-7GB RAM to run), which doesn't leave room for Qwen2.5-Coder +
-  # Postgres + Redis + ChromaDB on a laptop. 1b is ~1.6GB and uses the
-  # same safety taxonomy on a smaller backbone. nomic-embed-text is small
-  # (~275MB) and is required by Mem0's embedder config in
-  # memory/developer_memory.py — without it, Tier 3 memory fails at
-  # runtime the first time anyone's profile gets written or read.
+  # Pulls models only if they are not already present in the ollama_data
+  # volume. `ollama list` queries the running ollama server — if the model
+  # name appears in the output, the pull is skipped entirely so restarting
+  # the stack never re-downloads gigabytes of weights.
   ollama-init:
     image: ollama/ollama:latest
     depends_on:
       ollama:
         condition: service_healthy
     networks: [agentx-net]
-    entrypoint: ["sh", "-c",
-      "OLLAMA_HOST=ollama:11434 ollama pull qwen2.5-coder:3b && \
-       OLLAMA_HOST=ollama:11434 ollama pull llama-guard3:1b && \
-       OLLAMA_HOST=ollama:11434 ollama pull nomic-embed-text"]
+    volumes: [ollama_data:/root/.ollama]
+    entrypoint: ["sh", "-c", "
+      pull_if_missing() {
+        if OLLAMA_HOST=ollama:11434 ollama list | grep -q \"$1\"; then
+          echo \"$1 already present, skipping pull\";
+        else
+          echo \"Pulling $1 ...\";
+          OLLAMA_HOST=ollama:11434 ollama pull \"$1\";
+        fi
+      };
+      pull_if_missing qwen2.5-coder:3b &&
+      pull_if_missing llama-guard3:1b &&
+      pull_if_missing nomic-embed-text"]
     restart: "no"
 
   chromadb:
@@ -112,7 +116,7 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      DATABASE_URL: postgresql://agentx:${POSTGRES_PASSWORD}@postgres/agentx_db
+      DATABASE_URL: ${DATABASE_URL}
       REDIS_URL: redis://redis:6379
       OLLAMA_URL: http://ollama:11434
       CHROMA_URL: http://chromadb:8000
@@ -134,7 +138,7 @@ services:
     command: celery -A celery_worker worker --loglevel=info --concurrency=4
     env_file: .env
     environment:
-      DATABASE_URL: postgresql://agentx:${POSTGRES_PASSWORD}@postgres/agentx_db
+      DATABASE_URL: ${DATABASE_URL}
       REDIS_URL: redis://redis:6379
       OLLAMA_URL: http://ollama:11434
       CHROMA_URL: http://chromadb:8000

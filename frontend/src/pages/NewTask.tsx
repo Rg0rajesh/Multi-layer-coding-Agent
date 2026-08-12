@@ -1,9 +1,9 @@
 // frontend/src/pages/NewTask.tsx
-// Task creation form. On submit, POST /tasks kicks the Celery job off
-// server-side (routers/tasks.py already handles that) — this page's only
-// job is collecting a well-formed payload and routing to Live Monitor
-// once the task exists.
-import { useState, type FormEvent } from "react";
+// Prompt-first task creation — describe what you want, Guardrail/Planner
+// take it from there. Language is guessed from the prompt itself; there's
+// a manual override chip if the guess is wrong, but nobody has to pick
+// from a dropdown before they've even finished typing.
+import { useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { Sidebar } from "../components";
 import { tasksApi } from "../api";
@@ -11,26 +11,66 @@ import { ApiError } from "../api/client";
 import type { Priority } from "../types";
 import "./NewTask.css";
 
-const LANGUAGES = ["python", "typescript", "javascript", "go", "rust", "java"];
-const PRIORITIES: Priority[] = ["low", "medium", "high"];
+const STARTER_PROMPTS = [
+  "Build a REST API with JWT auth in FastAPI",
+  "Add a rate limiter middleware to my Express app",
+  "Write a CLI tool that batch-renames files in Go",
+  "Create a React dashboard with a sortable data table",
+  "Set up a Postgres migration for a new orders table",
+];
+
+// Word-boundary matching so "django" doesn't trip the "go" hint and
+// "javascript" doesn't trip the "java" hint.
+const LANGUAGE_HINTS: [RegExp, string][] = [
+  [/\b(typescript|react|next\.?js|vue|angular|nestjs)\b/i, "typescript"],
+  [/\b(javascript|node(\.js)?|express)\b/i, "javascript"],
+  [/\b(python|django|flask|fastapi)\b/i, "python"],
+  [/\b(golang|go)\b/i, "go"],
+  [/\b(rust|cargo)\b/i, "rust"],
+  [/\b(java|spring(boot)?)\b/i, "java"],
+];
+
+function guessLanguage(prompt: string): string | undefined {
+  const match = LANGUAGE_HINTS.find(([pattern]) => pattern.test(prompt));
+  return match?.[1];
+}
+
+function deriveTitle(prompt: string): string {
+  const firstLine = prompt.trim().split("\n")[0];
+  return firstLine.length > 60 ? `${firstLine.slice(0, 57)}...` : firstLine;
+}
 
 export default function NewTask() {
   const navigate = useNavigate();
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
-  const [language, setLanguage] = useState("python");
+  const [prompt, setPrompt] = useState("");
   const [priority, setPriority] = useState<Priority>("medium");
-  const [gitIntegration, setGitIntegration] = useState(false);
-  const [maxMinutes, setMaxMinutes] = useState(10);
-
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  async function handleSubmit(event: FormEvent) {
-    event.preventDefault();
-    if (!title.trim()) {
-      setFormError("Give the task a title first.");
+  const detectedLanguage = useMemo(() => guessLanguage(prompt), [prompt]);
+
+  function autoGrow() {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 320)}px`;
+  }
+
+  function usePrompt(text: string) {
+    setPrompt(text);
+    setFormError(null);
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      autoGrow();
+    });
+  }
+
+  async function submit() {
+    const trimmed = prompt.trim();
+    if (!trimmed) {
+      setFormError("Tell Agent X what to build first.");
       return;
     }
 
@@ -39,99 +79,133 @@ export default function NewTask() {
 
     try {
       const task = await tasksApi.create({
-        title: title.trim(),
-        description: description.trim() || undefined,
-        language,
+        title: deriveTitle(trimmed),
+        description: trimmed,
+        language: detectedLanguage,
         priority,
-        git_integration: gitIntegration,
-        max_exec_minutes: maxMinutes,
+        max_exec_minutes: 15,
       });
       navigate(`/monitor?task=${task.id}`);
     } catch (err) {
-      setFormError(err instanceof ApiError ? err.message : "Couldn't create the task — try again.");
+      setFormError(err instanceof ApiError ? err.message : "Couldn't start the task — try again.");
       setIsSubmitting(false);
+    }
+  }
+
+  function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    submit();
+  }
+
+  function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    // Cmd/Ctrl+Enter submits — Enter alone stays a newline, same as most
+    // prompt boxes people are already used to.
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      submit();
     }
   }
 
   return (
     <div className="app-shell">
       <Sidebar />
-      <main className="app-main">
-        <div className="page-header">
-          <div>
-            <h1>New Task</h1>
-            <p className="page-header__meta">Guardrail screens it, Planner breaks it down, you approve the plan.</p>
-          </div>
-        </div>
+      <main className="app-main new-task">
+        <div className="new-task__hero">
+          <h1 className="new-task__heading">What do you want to build?</h1>
+          <p className="new-task__subheading">
+            Describe it in plain English — Guardrail screens it, Planner breaks it down, and Coder picks a
+            stack based on what you write.
+          </p>
 
-        <form className="new-task-form card" onSubmit={handleSubmit}>
-          <label className="new-task-field">
-            <span>Title</span>
-            <input
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="Build a JWT refresh endpoint"
+          <form className="new-task__composer" onSubmit={handleSubmit}>
+            <textarea
+              ref={textareaRef}
+              className="new-task__textarea"
+              placeholder="Build a JWT refresh endpoint in FastAPI, or a React table with sorting and pagination..."
+              value={prompt}
+              onChange={(e) => {
+                setPrompt(e.target.value);
+                setFormError(null);
+                autoGrow();
+              }}
+              onKeyDown={handleKeyDown}
+              rows={1}
               autoFocus
             />
-          </label>
 
-          <label className="new-task-field">
-            <span>Description</span>
-            <textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="What should the Coder actually build? The more specific, the fewer re-plans."
-              rows={5}
-            />
-          </label>
+            <div className="new-task__composer-footer">
+              <div className="new-task__composer-left">
+                <PriorityToggle value={priority} onChange={setPriority} />
+                {detectedLanguage && (
+                  <span className="new-task__detected-lang" title="Detected from your prompt">
+                    {detectedLanguage}
+                  </span>
+                )}
+              </div>
 
-          <div className="new-task-row">
-            <label className="new-task-field">
-              <span>Language</span>
-              <select value={language} onChange={(e) => setLanguage(e.target.value)}>
-                {LANGUAGES.map((lang) => (
-                  <option key={lang} value={lang}>
-                    {lang}
-                  </option>
-                ))}
-              </select>
-            </label>
+              <button
+                type="submit"
+                className="new-task__submit"
+                disabled={isSubmitting || !prompt.trim()}
+                aria-label="Start task"
+              >
+                {isSubmitting ? <Spinner /> : <ArrowIcon />}
+              </button>
+            </div>
+          </form>
 
-            <label className="new-task-field">
-              <span>Priority</span>
-              <select value={priority} onChange={(e) => setPriority(e.target.value as Priority)}>
-                {PRIORITIES.map((p) => (
-                  <option key={p} value={p}>
-                    {p}
-                  </option>
-                ))}
-              </select>
-            </label>
+          {formError && <p className="new-task__error">{formError}</p>}
 
-            <label className="new-task-field">
-              <span>Time budget (min)</span>
-              <input
-                type="number"
-                min={1}
-                max={120}
-                value={maxMinutes}
-                onChange={(e) => setMaxMinutes(Number(e.target.value))}
-              />
-            </label>
+          <div className="new-task__chips">
+            {STARTER_PROMPTS.map((starter) => (
+              <button
+                key={starter}
+                type="button"
+                className="new-task__chip"
+                onClick={() => usePrompt(starter)}
+              >
+                {starter}
+              </button>
+            ))}
           </div>
-
-          <label className="new-task-checkbox">
-            <input type="checkbox" checked={gitIntegration} onChange={(e) => setGitIntegration(e.target.checked)} />
-            <span>Enable Git integration for this task</span>
-          </label>
-
-          {formError && <p className="new-task-form__error">{formError}</p>}
-
-          <button type="submit" className="btn btn--fill" disabled={isSubmitting}>
-            {isSubmitting ? "Starting…" : "Start Task"}
-          </button>
-        </form>
+        </div>
       </main>
     </div>
+  );
+}
+
+function PriorityToggle({ value, onChange }: { value: Priority; onChange: (p: Priority) => void }) {
+  const options: Priority[] = ["low", "medium", "high"];
+  return (
+    <div className="priority-toggle" role="radiogroup" aria-label="Priority">
+      {options.map((option) => (
+        <button
+          key={option}
+          type="button"
+          role="radio"
+          aria-checked={value === option}
+          className={`priority-toggle__option${value === option ? " is-active" : ""}`}
+          onClick={() => onChange(option)}
+        >
+          {option}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function ArrowIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M8 13V3M3 7l5-5 5 5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function Spinner() {
+  return (
+    <svg className="spinner" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+      <circle cx="12" cy="12" r="10" fill="none" strokeWidth="2.5" strokeDasharray="60" strokeLinecap="round" />
+    </svg>
   );
 }

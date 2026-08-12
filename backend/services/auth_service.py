@@ -1,4 +1,4 @@
-﻿# backend/services/auth_service.py
+# backend/services/auth_service.py
 """
 Handles the actual auth logic: password hashing, JWT issuance, refresh-token
 rotation, the current-user dependency every protected route uses, and the
@@ -12,11 +12,11 @@ import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
 
+import bcrypt
 import httpx
 from fastapi import Depends, Header, HTTPException, status
 from fastapi.concurrency import run_in_threadpool
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,8 +24,6 @@ from config import settings
 from database import get_db
 from models.user import User
 from models.user_session import UserSession
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"
 GITHUB_USER_URL = "https://api.github.com/user"
@@ -39,12 +37,18 @@ GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 # ---------------------------------------------------------------------------
 
 async def hash_password(raw: str) -> str:
-    # bcrypt is intentionally slow (~100ms) — never block the event loop with it
-    return await run_in_threadpool(pwd_context.hash, raw)
+    # bcrypt is intentionally slow (~100ms) — never block the event loop with it.
+    # Passwords are capped at 72 bytes per bcrypt specification.
+    pwd_bytes = raw.encode("utf-8")[:72]
+    salt = bcrypt.gensalt()
+    hashed = await run_in_threadpool(bcrypt.hashpw, pwd_bytes, salt)
+    return hashed.decode("utf-8")
 
 
 async def verify_password(raw: str, hashed: str) -> bool:
-    return await run_in_threadpool(pwd_context.verify, raw, hashed)
+    pwd_bytes = raw.encode("utf-8")[:72]
+    hashed_bytes = hashed.encode("utf-8")
+    return await run_in_threadpool(bcrypt.checkpw, pwd_bytes, hashed_bytes)
 
 
 # ---------------------------------------------------------------------------

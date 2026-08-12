@@ -1,4 +1,4 @@
-﻿# backend/database.py
+# backend/database.py
 from collections.abc import AsyncGenerator
 
 from sqlalchemy import MetaData
@@ -23,7 +23,7 @@ class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
 
-def _async_database_url(raw_url: str) -> str:
+def _async_database_url(raw_url: str) -> tuple[str, dict[str, object]]:
     """
     DATABASE_URL in .env is the plain postgresql:// form people write by
     hand (and what alembic/psql expect) — asyncpg needs the +asyncpg
@@ -35,11 +35,24 @@ def _async_database_url(raw_url: str) -> str:
     url = make_url(raw_url)
     if url.get_backend_name() == "postgresql" and url.get_driver_name() in ("psycopg2", ""):
         url = url.set(drivername="postgresql+asyncpg")
-    return str(url)
+
+    connect_args: dict[str, object] = {}
+    query = dict(url.query)
+    sslmode = query.pop("sslmode", None)
+    if sslmode is not None:
+        if isinstance(sslmode, str) and sslmode.lower() in ("disable", "false", "0"):
+            connect_args["ssl"] = False
+        else:
+            connect_args["ssl"] = True
+        url = url.set(query=query)
+
+    return url.render_as_string(hide_password=False), connect_args
 
 
+async_database_url, async_connect_args = _async_database_url(settings.database_url)
 engine = create_async_engine(
-    _async_database_url(settings.database_url),
+    async_database_url,
+    connect_args=async_connect_args,
     pool_pre_ping=True,
     pool_size=10,
     max_overflow=20,

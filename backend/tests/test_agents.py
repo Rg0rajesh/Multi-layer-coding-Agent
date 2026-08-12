@@ -16,7 +16,7 @@ from agents.coder_agent import coder_node
 from agents.planner_agent import MAX_SUBTASKS, planner_node
 from agents.reviewer_agent import APPROVAL_THRESHOLD, reviewer_node
 from agents.security_agent import security_node
-from services.llm_service import LLMGenerationError
+from services.llm_service import LLMGenerationError, chat
 
 pytestmark = pytest.mark.asyncio
 
@@ -118,3 +118,31 @@ class TestSecurityAgent:
 
         assert result["safety_passed"] is True
         assert result["safety_report"]["findings"] == []
+
+
+class TestLLMService:
+    async def test_chat_uses_choices_message_content(self, monkeypatch):
+        class DummyClient:
+            async def post(self, *args, **kwargs):
+                return mock_resp
+
+        class DummySemaphore:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        mock_resp = AsyncMock()
+        mock_resp.raise_for_status.return_value = None
+        mock_resp.json.return_value = {
+            "choices": [
+                {"message": {"content": '{"risk_score": 70, "reason": "okay"}'}}
+            ]
+        }
+
+        monkeypatch.setattr("services.llm_service._get_client", lambda: DummyClient())
+        monkeypatch.setattr("services.llm_service._get_semaphore", lambda: DummySemaphore())
+
+        content = await chat(system="s", user="u", model="m", temperature=0)
+        assert content == '{"risk_score": 70, "reason": "okay"}'

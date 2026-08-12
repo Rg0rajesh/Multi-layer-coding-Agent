@@ -31,27 +31,57 @@ async def planner_node(state: WorkflowState) -> dict:
     is_replan = state.get("replan_count", 0) > 0
 
     await emit_log(
-        task_id, "PLANNER", "INIT", "→",
-        "Re-planning after human feedback" if is_replan else "Breaking task into subtasks",
+        task_id,
+        "PLANNER",
+        "INIT",
+        "→",
+        "Re-planning after human feedback"
+        if is_replan
+        else "Breaking task into subtasks",
     )
 
     try:
-        plan = await generate_json(system=SYSTEM_PROMPT, user=_build_prompt(state))
+        plan = await generate_json(
+            system=SYSTEM_PROMPT,
+            user=_build_prompt(state),
+        )
+
     except LLMGenerationError as exc:
-        await emit_log(task_id, "PLANNER", "ERROR", "✗", f"Couldn't produce a usable plan: {exc}")
+        logger.error(
+            "Planner LLM output was invalid JSON. Raw response: %r",
+            exc.raw_response,
+        )
+
+        await emit_log(
+            task_id,
+            "PLANNER",
+            "ERROR",
+            "✗",
+            f"Couldn't produce a usable plan: {exc}",
+        )
+
         raise
 
     plan["subtasks"] = plan.get("subtasks", [])[:MAX_SUBTASKS]
 
     await emit_log(
-        task_id, "PLANNER", "PASS", "✓",
-        f"Plan ready — {len(plan['subtasks'])} subtask(s), est. {plan.get('estimated_minutes', '?')} min",
+        task_id,
+        "PLANNER",
+        "PASS",
+        "✓",
+        f"Plan ready — {len(plan['subtasks'])} subtask(s), "
+        f"est. {plan.get('estimated_minutes', '?')} min",
     )
 
     return {
         "plan": plan,
-        "plan_approved": False,  # human hasn't seen this version yet
-        "messages": [{"agent": "PLANNER", "content": plan}],
+        "plan_approved": False,
+        "messages": [
+            {
+                "agent": "PLANNER",
+                "content": plan,
+            }
+        ],
     }
 
 
