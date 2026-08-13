@@ -1,9 +1,3 @@
-# backend/services/llm_service.py
-"""
-Thin async wrapper around Ollama's HTTP API.
-All agents use this module so connection, timeout, retry and JSON handling
-stay in one place.
-"""
 from __future__ import annotations
 
 import asyncio
