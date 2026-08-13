@@ -1,9 +1,8 @@
 # backend/services/llm_service.py
 """
-Thin async wrapper around Ollama's HTTP API. Every agent (Planner, Coder,
-Tester, Reviewer, Guardrail, Context Curator) calls through here instead
-of hitting httpx directly — keeps the retry/timeout/concurrency policy in
-one place instead of duplicated across six agent files.
+Thin async wrapper around Ollama's HTTP API.
+All agents use this module so connection, timeout, retry and JSON handling
+stay in one place.
 """
 from __future__ import annotations
 
@@ -21,32 +20,16 @@ logger = logging.getLogger(__name__)
 
 
 class OllamaUnavailableError(Exception):
-    """
-    Connection-level failure — Ollama not reachable, timed out, still
-    loading the model into memory. Callers (ultimately celery_worker)
-    retry the whole step on this. Not raised for bad model output;
-    that's a different problem and retrying blindly just burns time.
-
-    Named OllamaUnavailableError (not TransientWorkflowError) on purpose —
-    celery_worker.py used to define its own class with that exact name,
-    and the two never matched, so real Ollama timeouts were falling
-    through to the generic failure path instead of being retried.
-    """
+    """Connection-level failure that can be retried by the worker."""
 
 
 class LLMGenerationError(Exception):
-    """The model responded, but the output wasn't usable (bad JSON, empty
-    response, etc). Includes the raw text so the caller can log or inspect
-    it — deliberately not retried automatically here."""
+    """Ollama responded, but the response could not be used."""
 
     def __init__(self, message: str, raw_response: str = ""):
         super().__init__(message)
         self.raw_response = raw_response
 
-
-# ---------------------------------------------------------------------------
-# Shared client + concurrency guard
-# ---------------------------------------------------------------------------
 
 _client: httpx.AsyncClient | None = None
 _semaphore: asyncio.Semaphore | None = None
@@ -75,16 +58,11 @@ def _get_semaphore() -> asyncio.Semaphore:
 
 
 async def close_client() -> None:
-    """Call on worker/app shutdown so we're not leaving sockets open."""
     global _client
     if _client is not None:
         await _client.aclose()
         _client = None
 
-
-# ---------------------------------------------------------------------------
-# Core call
-# ---------------------------------------------------------------------------
 
 _MAX_CONNECTION_RETRIES = 2
 _RETRY_BACKOFF_SECONDS = 1.5
@@ -98,12 +76,8 @@ async def chat(
     temperature: float = 0.2,
     json_mode: bool = False,
 ) -> str:
-    """
-    Sends a single system+user turn to Ollama's /api/chat and returns
-    the raw text response.
-    """
-
-    payload = {
+    """Send one request to Ollama and return the assistant text."""
+    payload: dict[str, Any] = {
         "model": model or settings.ollama_model,
         "messages": [
             {"role": "system", "content": system},
@@ -125,23 +99,16 @@ async def chat(
     for attempt in range(1, _MAX_CONNECTION_RETRIES + 1):
         try:
             async with _get_semaphore():
-                response = await client.post(
-                    "/api/chat",
-                    json=payload,
-                )
+                response = await client.post("/api/chat", json=payload)
 
             response.raise_for_status()
-
             body = response.json()
-
             content = body.get("message", {}).get("content", "")
 
             if not content:
                 choices = body.get("choices", [])
-
                 if isinstance(choices, list) and choices:
                     first_choice = choices[0]
-
                     if isinstance(first_choice, dict):
                         content = (
                             first_choice.get("message", {}).get("content", "")
@@ -158,7 +125,6 @@ async def chat(
 
         except (httpx.ConnectError, httpx.TimeoutException) as exc:
             last_error = exc
-
             if attempt < _MAX_CONNECTION_RETRIES:
                 logger.warning(
                     "Ollama unreachable (attempt %d/%d), retrying: %s",
@@ -166,11 +132,7 @@ async def chat(
                     _MAX_CONNECTION_RETRIES,
                     exc,
                 )
-
-                await asyncio.sleep(
-                    _RETRY_BACKOFF_SECONDS * attempt
-                )
-
+                await asyncio.sleep(_RETRY_BACKOFF_SECONDS * attempt)
                 continue
 
             raise OllamaUnavailableError(
@@ -186,20 +148,11 @@ async def chat(
     raise OllamaUnavailableError(str(last_error))
 
 
-# ---------------------------------------------------------------------------
-# JSON-mode helper — what Planner/Reviewer/Tester/Curator/Guardrail actually use
-# ---------------------------------------------------------------------------
-
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
 
 
 def _extract_json(text: str) -> dict[str, Any]:
-    """
-    Agent system prompts say 'output ONLY valid JSON', and the 3B model
-    mostly listens — but 'mostly' isn't good enough to json.loads() blind.
-    Strips a markdown fence if present, then falls back to grabbing the
-    outermost {...} span before giving up.
-    """
+    """Extract a JSON object from normal JSON or fenced/model-prefixed text."""
     candidate = text.strip()
 
     fence_match = _JSON_FENCE_RE.search(candidate)
@@ -207,18 +160,26 @@ def _extract_json(text: str) -> dict[str, Any]:
         candidate = fence_match.group(1).strip()
 
     try:
-        return json.loads(candidate)
+        value = json.loads(candidate)
+        if isinstance(value, dict):
+            return value
     except json.JSONDecodeError:
         pass
 
-    start, end = candidate.find("{"), candidate.rfind("}")
+    start = candidate.find("{")
+    end = candidate.rfind("}")
     if start != -1 and end != -1 and end > start:
         try:
-            return json.loads(candidate[start:end + 1])
+            value = json.loads(candidate[start : end + 1])
+            if isinstance(value, dict):
+                return value
         except json.JSONDecodeError:
             pass
 
-    raise LLMGenerationError("Model output wasn't valid JSON", raw_response=text)
+    raise LLMGenerationError(
+        "Model output wasn't valid JSON",
+        raw_response=text,
+    )
 
 
 async def generate_json(
@@ -228,30 +189,22 @@ async def generate_json(
     model: str | None = None,
     temperature: float = 0.2,
 ) -> dict[str, Any]:
-    """What Planner/Coder/Tester/Reviewer/Curator actually call. Raises
-    LLMGenerationError (with .raw_response attached) if the model's output
-    can't be salvaged into JSON — the caller decides whether to re-prompt."""
-    raw = await chat(system=system, user=user, model=model, temperature=temperature)
+    """Generate and parse a JSON object for planner/reviewer/tester agents."""
+    raw = await chat(
+        system=system,
+        user=user,
+        model=model,
+        temperature=temperature,
+        json_mode=True,
+    )
     return _extract_json(raw)
 
-
-# ---------------------------------------------------------------------------
-# Guardrail (C9) — separate model, same transport
-# ---------------------------------------------------------------------------
 
 async def classify_risk(
     task_description: str,
     prior_score: float = 0.0,
 ) -> dict[str, Any]:
-    """
-    Runs Llama Guard against the incoming task.
-
-    Llama Guard normally returns a native classification such as:
-    "safe" or "unsafe", rather than application-specific JSON.
-    Convert that native response into the risk-score format expected
-    by the Guardrail agent.
-    """
-
+    """Classify an incoming task with the configured Llama Guard model."""
     system = (
         "You are a safety classifier. "
         "Classify the user's request as exactly one of: safe or unsafe. "
@@ -285,12 +238,8 @@ async def classify_risk(
     )
 
 
-# ---------------------------------------------------------------------------
-# Startup helper — optional, but avoids the first real request in a fresh
-# worker paying full model-load latency on top of its own timeout budget.
-# ---------------------------------------------------------------------------
-
 async def ensure_model_ready(model: str) -> None:
+    """Warm the requested model when it is not already listed by Ollama."""
     try:
         client = _get_client()
         response = await client.get("/api/tags")
@@ -298,6 +247,11 @@ async def ensure_model_ready(model: str) -> None:
         loaded = {m["name"] for m in response.json().get("models", [])}
         if model not in loaded:
             logger.info("Warming up %s — first call after this will be slow", model)
-            await chat(system="You are a helper.", user="ready?", model=model, temperature=0.0)
+            await chat(
+                system="You are a helper.",
+                user="ready?",
+                model=model,
+                temperature=0.0,
+            )
     except (httpx.ConnectError, httpx.TimeoutException) as exc:
         logger.warning("Couldn't warm up %s: %s", model, exc)
