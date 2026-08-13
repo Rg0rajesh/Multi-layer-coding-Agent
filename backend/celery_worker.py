@@ -1,11 +1,9 @@
-﻿# backend/celery_worker.py
+# backend/celery_worker.py
 """
 Celery entrypoint for AGENTX's background task execution.
 
 This file owns exactly one job: take a task_id off the queue, run the
 agent workflow against it, and make sure the DB reflects what happened.
-It does not know anything about Planner/Coder/Tester internals — that
-lives in workflow/workflow.py and is imported lazily below.
 """
 from __future__ import annotations
 
@@ -15,8 +13,6 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-# Ensure local backend modules can be imported even when Celery starts from a
-# working directory that does not already include /app.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from celery import Celery
@@ -37,52 +33,29 @@ celery_app = Celery(
     backend=settings.redis_url,
 )
 
+# Ollama-based multi-agent workflows can legitimately take several minutes.
+# Keep a generous default so slow local model generation is not killed early.
+DEFAULT_SOFT_LIMIT_SECONDS = 20 * 60
+DEFAULT_HARD_LIMIT_SECONDS = 25 * 60
+
 celery_app.conf.update(
     task_serializer="json",
     result_serializer="json",
     accept_content=["json"],
     timezone="UTC",
     enable_utc=True,
-
-    # A task is only acked after it finishes. If the worker gets OOM-killed
-    # (Ollama + Postgres + Redis + Chroma all fighting for RAM on a laptop
-    # is a real scenario here), the job goes back on the queue instead of
-    # vanishing.
     task_acks_late=True,
     task_reject_on_worker_lost=True,
-
-    # Recycle workers periodically — long-lived processes that keep opening
-    # HTTP clients to Ollama/Chroma tend to creep in memory over a day.
     worker_max_tasks_per_child=50,
-    worker_prefetch_multiplier=1,  # don't let one worker hoard several long jobs
+    worker_prefetch_multiplier=1,
+    task_soft_time_limit=DEFAULT_SOFT_LIMIT_SECONDS,
+    task_time_limit=DEFAULT_HARD_LIMIT_SECONDS,
 )
-
-# Hard ceiling if a task doesn't set its own limit. Individual jobs override
-# this via apply_async(soft_time_limit=...) based on Task.max_exec_minutes.
-DEFAULT_SOFT_LIMIT_SECONDS = 20 * 60
-DEFAULT_HARD_LIMIT_SECONDS = 25 * 60
 
 
 class GovernanceUnavailableError(Exception):
-    """
-    Raised when OPA can't be reached during Identity Broker's credential
-    issuance. Same treatment as an Ollama hiccup — infra flapping, not a
-    bad result, so it's worth a Celery retry rather than a hard failure.
-    Defined here (not in governance/opa_client.py) to keep the retry
-    policy decision in one place, next to where it's actually enforced.
-    """
+    """Raised when OPA cannot be reached during credential issuance."""
 
-
-# ---------------------------------------------------------------------------
-# Event loop lifecycle
-#
-# Celery's default pool forks worker processes. database.py creates its
-# AsyncEngine (and asyncpg's connection pool) once, at import time, in the
-# parent process — those connections are bound to the parent's event loop.
-# After fork, a child using them directly will either hang or throw
-# "attached to a different loop". Fix: dispose the inherited pool right
-# after fork so each child lazily builds its own, tied to its own loop.
-# ---------------------------------------------------------------------------
 
 _worker_loop: asyncio.AbstractEventLoop | None = None
 
@@ -97,21 +70,15 @@ def _init_worker_process(**_kwargs) -> None:
 
 
 def _run_async(coro):
-    """Runs a coroutine on this worker's dedicated loop, reusing it across
-    tasks instead of spinning up a fresh loop (and asyncpg pool) per job."""
     loop = _worker_loop or asyncio.get_event_loop()
     return loop.run_until_complete(coro)
 
-
-# ---------------------------------------------------------------------------
-# DB helpers
-# ---------------------------------------------------------------------------
 
 async def _mark_task_started(task_id: str) -> None:
     async with async_session_factory() as db:
         task = await db.get(Task, task_id)
         if task is None:
-            raise ValueError(f"Task {task_id} not found — was it deleted before the worker picked it up?")
+            raise ValueError(f"Task {task_id} not found")
         task.status = "running"
         task.started_at = datetime.now(timezone.utc)
         await db.commit()
@@ -121,7 +88,7 @@ async def _mark_task_finished(task_id: str, *, success: bool, error: str | None 
     async with async_session_factory() as db:
         task = await db.get(Task, task_id)
         if task is None:
-            return  # nothing to update — task was deleted mid-run
+            return
 
         now = datetime.now(timezone.utc)
         task.status = "completed" if success else "failed"
@@ -134,16 +101,12 @@ async def _mark_task_finished(task_id: str, *, success: bool, error: str | None 
                 task_id=task.id,
                 agent_name="SYSTEM",
                 log_level="ERROR",
-                message=error[:2000],  # log_entries.message has no hard cap, but keep rows sane
+                message=error[:2000],
                 severity="critical",
             ))
 
         await db.commit()
 
-
-# ---------------------------------------------------------------------------
-# The actual task
-# ---------------------------------------------------------------------------
 
 @celery_app.task(
     bind=True,
@@ -154,13 +117,7 @@ async def _mark_task_finished(task_id: str, *, success: bool, error: str | None 
     time_limit=DEFAULT_HARD_LIMIT_SECONDS,
 )
 def run_workflow_task(self, task_id: str) -> dict:
-    """
-    Entry point Celery calls. Kept synchronous on the outside (Celery's
-    prefork pool expects that) and bridges into the async workflow via
-    _run_async. Import of run_task_workflow is deliberately deferred to
-    call time so this module can be imported (and the Celery app started)
-    even before workflow/workflow.py has real content.
-    """
+    """Run one AGENTX workflow inside Celery's prefork worker."""
     try:
         from workflow.workflow import run_task_workflow
     except ImportError:
@@ -176,14 +133,19 @@ def run_workflow_task(self, task_id: str) -> dict:
         return result
 
     except SoftTimeLimitExceeded:
-        _run_async(_mark_task_finished(task_id, success=False, error="Task exceeded its time limit"))
+        logger.error("Task %s exceeded the %s-second soft time limit", task_id, DEFAULT_SOFT_LIMIT_SECONDS)
+        _run_async(_mark_task_finished(
+            task_id,
+            success=False,
+            error=f"Task exceeded its {DEFAULT_SOFT_LIMIT_SECONDS // 60}-minute time limit",
+        ))
         raise
 
     except (OllamaUnavailableError, GovernanceUnavailableError) as exc:
         logger.warning("Transient failure on task %s, retrying: %s", task_id, exc)
         raise self.retry(exc=exc)
 
-    except Exception as exc:  # noqa: BLE001 — genuinely broad: this is the last line of defense
+    except Exception as exc:
         logger.exception("Task %s failed", task_id)
         _run_async(_mark_task_finished(task_id, success=False, error=str(exc)))
         raise
