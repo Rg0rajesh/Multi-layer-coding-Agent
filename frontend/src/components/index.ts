@@ -5,3 +5,4 @@ export { Logo } from "./Logo";
 export { LogStream } from "./LogStream";
 export { AgentPanel } from "./AgentPanel";
 export { StatusPill } from "./StatusPill";
+export { HumanApprovalPanel } from "./HumanApprovalPanel";
