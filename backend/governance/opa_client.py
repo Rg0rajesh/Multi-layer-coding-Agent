@@ -1,12 +1,10 @@
 # backend/governance/opa_client.py
 """
-Talks to Open Policy Agent for scoped-permission decisions and turns the
-result into an IdentityToken row. Identity Broker is the only caller —
-see agents/identity_broker.py.
+OPA-backed authorization for AGENTX execution.
 
-OPA does the actual authorization math in Rego, not Python, on purpose:
-we don't want a probabilistic model anywhere near "can this task touch
-the filesystem."
+OPA is the policy authority. Python adds defense-in-depth checks for token
+expiry, requested-tool membership, and file-level scope before a tool call
+is considered authorized.
 """
 from __future__ import annotations
 
@@ -43,14 +41,10 @@ async def close_client() -> None:
 
 
 class PolicyEvaluationError(Exception):
-    """OPA didn't return a usable decision — unreachable, bad policy path,
-    or a malformed response. Treat this as "deny everything," not as
-    something worth retrying with a wider scope."""
+    """OPA did not return a usable authorization decision."""
 
 
 async def opa_evaluate(policy_path: str, *, input_doc: dict) -> dict:
-    """policy_path is dot-separated, e.g. 'agentx.authz.scope' — gets
-    translated into OPA's /v1/data/<path> URL shape."""
     url = f"/v1/data/{policy_path.replace('.', '/')}"
 
     try:
@@ -61,25 +55,38 @@ async def opa_evaluate(policy_path: str, *, input_doc: dict) -> dict:
     except httpx.HTTPStatusError as exc:
         raise PolicyEvaluationError(f"OPA returned {exc.response.status_code}") from exc
 
-    body = response.json()
-    if "result" not in body:
-        raise PolicyEvaluationError(f"No 'result' key in OPA response for {policy_path}")
+    try:
+        body = response.json()
+    except ValueError as exc:
+        raise PolicyEvaluationError("OPA returned non-JSON data") from exc
+
+    if "result" not in body or not isinstance(body["result"], dict):
+        raise PolicyEvaluationError(f"No usable 'result' for {policy_path}")
     return body["result"]
 
 
 async def opa_issue_token(task_id: str, needed_scope: dict) -> IdentityToken:
-    """Evaluates the workspace policy against what this run says it needs,
-    then persists a token scoped to whatever OPA actually granted — which
-    may be narrower than needed_scope if the policy trims it."""
     decision = await opa_evaluate("agentx.authz.scope", input_doc=needed_scope)
-    allowed_scope = decision.get("allowed_scope", {})
+    allowed_scope = decision.get("allowed_scope")
+    if not isinstance(allowed_scope, dict):
+        raise PolicyEvaluationError("OPA returned no allowed_scope")
 
-    if not allowed_scope.get("tools"):
-        logger.warning("OPA granted an empty tool scope for task %s — Coder/Tester will have nothing to work with", task_id)
+    allowed_tools = allowed_scope.get("tools", [])
+    allowed_files = allowed_scope.get("files", [])
+    if not isinstance(allowed_tools, list) or not isinstance(allowed_files, list):
+        raise PolicyEvaluationError("OPA returned malformed scope")
+
+    requested_tools = set(needed_scope.get("requested_tools", []))
+    if not set(allowed_tools).issubset(requested_tools):
+        raise PolicyEvaluationError("OPA returned a tool outside the requested scope")
+
+    requested_files = set(needed_scope.get("touched_files", []))
+    if not set(allowed_files).issubset(requested_files):
+        raise PolicyEvaluationError("OPA returned a file outside the requested scope")
 
     token = IdentityToken(
         task_id=task_id,
-        scope=allowed_scope,
+        scope={"tools": allowed_tools, "files": allowed_files},
         tool_call_log=[],
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=TOKEN_TTL_MINUTES),
     )
@@ -93,22 +100,10 @@ async def opa_issue_token(task_id: str, needed_scope: dict) -> IdentityToken:
 
 
 async def log_tool_call(task_id: str, tool: str, *, target: str | None = None) -> bool:
-    """
-    Appends one entry to the task's active token's tool_call_log — this is
-    what Coder/Tester are supposed to call every time they actually do
-    something under the credential Identity Broker issued them.
+    """Authorize and record a tool attempt against the active token.
 
-    Without this, tool_call_log stays permanently empty and
-    evaluation.metrics._scope_violations() has nothing to count, which
-    means the C7 metric always reports zero regardless of what actually
-    happened. Returns whether the call was in-scope, so callers can decide
-    whether to act on it or just log the attempt.
-
-    A missing token (OPA was unreachable, or this ran before Identity
-    Broker existed in an older task) isn't fatal here — nothing to log
-    against, so we just say "allowed" and let the caller proceed. Identity
-    Broker already fails loudly on its own if OPA is down; this function's
-    job is bookkeeping, not re-litigating that decision.
+    Missing/expired credentials are DENIED. File operations additionally
+    require the target path to be explicitly present in the OPA file scope.
     """
     async with async_session_factory() as db:
         token = (
@@ -119,11 +114,19 @@ async def log_tool_call(task_id: str, tool: str, *, target: str | None = None) -
             )
         ).scalars().first()
 
+        now = datetime.now(timezone.utc)
         if token is None:
-            return True
+            logger.warning("Denied tool call without identity token: task=%s tool=%s", task_id, tool)
+            return False
 
         allowed_tools = set(token.scope.get("tools", []))
-        in_scope = tool in allowed_tools
+        allowed_files = set(token.scope.get("files", []))
+        not_expired = token.expires_at is not None and token.expires_at > now
+        in_scope = not_expired and tool in allowed_tools
+
+        if tool in {"file_read", "file_write"}:
+            normalized_target = (target or "").replace("\\", "/")
+            in_scope = in_scope and normalized_target in allowed_files
 
         token.tool_call_log = [
             *token.tool_call_log,
@@ -131,27 +134,30 @@ async def log_tool_call(task_id: str, tool: str, *, target: str | None = None) -
                 "tool": tool,
                 "target": target,
                 "in_scope": in_scope,
-                "at": datetime.now(timezone.utc).isoformat(),
+                "at": now.isoformat(),
             },
         ]
         await db.commit()
 
         if not in_scope:
             logger.warning(
-                "Tool call outside granted scope — task %s tried %r (target=%r), token only grants %s",
-                task_id, tool, target, sorted(allowed_tools),
+                "Denied out-of-scope tool call: task=%s tool=%r target=%r tools=%s files=%s expired=%s",
+                task_id,
+                tool,
+                target,
+                sorted(allowed_tools),
+                sorted(allowed_files),
+                not not_expired,
             )
-
         return in_scope
 
 
 def derive_scope(plan: dict) -> dict:
-    """Turns a Planner subtask list into the input shape the Rego policy
-    expects. Tester always runs in the pipeline regardless of what the
-    plan says, so pytest is always requested — no need to inspect the
-    subtasks for that."""
     subtasks = plan.get("subtasks", [])
-    touched_files = [st["file"] for st in subtasks if st.get("file")]
+    touched_files = [
+        st["file"] for st in subtasks
+        if isinstance(st, dict) and st.get("file") and isinstance(st["file"], str)
+    ]
 
     return {
         "requested_tools": ["file_read", "file_write", "pytest"],
