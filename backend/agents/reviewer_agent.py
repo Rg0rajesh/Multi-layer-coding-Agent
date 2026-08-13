@@ -17,8 +17,11 @@ SYSTEM_PROMPT = """You are REVIEWER, the senior code reviewer for AGENTX.
 RULES:
 - Score 0.0-10.0 and identify issues by severity
 - Never approve code when tests failed or security has blocking findings
-- Consider the supplied project memory and known bugs
+- Consider supplied project memory and known bugs
+- developer_preferences must contain only reusable coding-style preferences explicitly supported by the code/review
+- Never put secrets, credentials, tokens, personal data, or task-specific facts into developer_preferences
 OUTPUT: {"score": 8.7, "summary": "...", "issues": [], "strengths": [],
+         "developer_preferences": [],
          "approval": "approved|approved_with_suggestions|needs_revision"}
 """
 
@@ -32,11 +35,7 @@ async def reviewer_node(state: WorkflowState) -> dict:
     memory_block = ""
     if state.get("user_id"):
         try:
-            manager = MemoryManager(
-                task_id=task_id,
-                user_id=state["user_id"],
-                project_id=state.get("project_id"),
-            )
+            manager = MemoryManager(task_id=task_id, user_id=state["user_id"], project_id=state.get("project_id"))
             memory_block = (await manager.build_agent_context(state.get("task_description", ""))).as_prompt_block()
         except Exception:
             logger.warning("Reviewer memory retrieval failed for task %s", task_id, exc_info=True)
@@ -62,7 +61,6 @@ async def reviewer_node(state: WorkflowState) -> dict:
     test_results = state.get("test_results") or {}
     tests_failed = bool(test_results.get("failed", 0) or test_results.get("error"))
     security_failed = not state.get("safety_passed", True)
-
     deterministic_blockers = []
     if tests_failed:
         deterministic_blockers.append("tests_failed")
@@ -71,18 +69,21 @@ async def reviewer_node(state: WorkflowState) -> dict:
     if not state.get("code_files"):
         deterministic_blockers.append("no_generated_code")
 
-    if deterministic_blockers:
+    approval = review.get("approval", "needs_revision")
+    if deterministic_blockers or score < APPROVAL_THRESHOLD:
         approval = "needs_revision"
         score = min(score, APPROVAL_THRESHOLD - 0.01)
-    else:
-        approval = review.get("approval", "needs_revision")
-        if score < APPROVAL_THRESHOLD:
-            approval = "needs_revision"
+
+    preferences = review.get("developer_preferences", [])
+    if not isinstance(preferences, list):
+        preferences = []
+    preferences = [p.strip()[:500] for p in preferences if isinstance(p, str) and p.strip()]
 
     review = {
         **review,
         "score": round(score, 2),
         "approval": approval,
+        "developer_preferences": preferences,
         "deterministic_blockers": deterministic_blockers,
     }
 
