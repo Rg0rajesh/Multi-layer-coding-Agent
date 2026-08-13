@@ -1,17 +1,12 @@
-﻿# backend/workflow/workflow.py
+# backend/workflow/workflow.py
 """
-Builds and runs the full 10-node AGENTX pipeline (v2.1):
+Builds and runs the full 10-node AGENTX pipeline:
 
   Guardrail -> Planner -> Grounding -> Human -> Identity Broker
     -> Coder -> Tester -> Security -> Reviewer -> Context Curator
 
-Every node function already existed in agents/*.py — this file's only job
-is wiring them into one compiled StateGraph and knowing how to turn a
-task_id into an initial state, and a finished state back into rows in
-Postgres. This is what celery_worker.py imports at call time
-(`from workflow.workflow import run_task_workflow`) — before this file
-existed, every task submission would fail the moment a worker picked it
-up.
+Governance gates are fail-closed: an approved plan cannot reach Coder unless
+Identity Broker successfully receives a non-empty scoped credential from OPA.
 """
 from __future__ import annotations
 
@@ -43,20 +38,21 @@ MAX_REPLANS = 3
 MAX_CODER_RETRIES = 3
 
 
-# ---------------------------------------------------------------------------
-# Routing — reuses the v1 rules from workflow/routing.py where the decision
-# is identical, only remaps where v2 inserts a new node in between.
-# ---------------------------------------------------------------------------
-
 def _route_after_guardrail(state: WorkflowState) -> str:
     return END if state.get("risk_verdict") == "block" else "planner"
 
 
 def _route_after_human_v2(state: WorkflowState) -> str:
-    # Same approve/reject/replan decision as v1 — an approved plan just
-    # needs a scoped credential (Identity Broker) before Coder can run.
     decision = route_after_human(state, max_replans=MAX_REPLANS)
     return "identity_broker" if decision == "coder" else decision
+
+
+def _route_after_identity_broker(state: WorkflowState) -> str:
+    """Never allow Coder to run without a valid OPA-issued credential."""
+    token = state.get("identity_token")
+    if not token or not token.get("id") or not token.get("scope", {}).get("tools"):
+        return END
+    return "coder"
 
 
 def _route_after_tester(state: WorkflowState) -> str:
@@ -83,21 +79,17 @@ def build_agentx_graph():
 
     graph.set_entry_point("guardrail")
     graph.add_conditional_edges("guardrail", _route_after_guardrail, {"planner": "planner", END: END})
-
     graph.add_edge("planner", "grounding")
-
-    # Ungrounded plans still go to a human rather than auto-replanning —
-    # a person should see the unsupported_claims flag and decide (see
-    # grounding_agent.py's docstring for the reasoning).
     graph.add_edge("grounding", "human_approval")
-
     graph.add_conditional_edges(
         "human_approval", _route_after_human_v2,
         {"identity_broker": "identity_broker", "planner": "planner", END: END},
     )
-    graph.add_edge("identity_broker", "coder")
+    graph.add_conditional_edges(
+        "identity_broker", _route_after_identity_broker,
+        {"coder": "coder", END: END},
+    )
     graph.add_edge("coder", "tester")
-
     graph.add_conditional_edges(
         "tester", _route_after_tester, {"security": "security", "coder": "coder", END: END},
     )
@@ -110,8 +102,6 @@ def build_agentx_graph():
     return graph.compile()
 
 
-# Compiled once per worker process, not once per task — building the graph
-# is cheap but there's no reason to redo it on every single job.
 _compiled_graph = None
 
 
@@ -121,10 +111,6 @@ def _get_graph():
         _compiled_graph = build_agentx_graph()
     return _compiled_graph
 
-
-# ---------------------------------------------------------------------------
-# task_id  <->  WorkflowState
-# ---------------------------------------------------------------------------
 
 async def _load_initial_state(task_id: str) -> tuple[WorkflowState, Task]:
     async with async_session_factory() as db:
@@ -149,10 +135,6 @@ async def _load_initial_state(task_id: str) -> tuple[WorkflowState, Task]:
 
 
 async def _persist_final_state(task_id: str, final_state: dict) -> None:
-    """Folds whatever the graph ended up with back into the tasks row —
-    without this, evaluation/metrics.py has nothing but zeros to read —
-    and writes out code_outputs so the Code Output page has something to
-    show once a run finishes."""
     async with async_session_factory() as db:
         task = await db.get(Task, task_id)
         if task is None:
@@ -173,7 +155,6 @@ async def _persist_final_state(task_id: str, final_state: dict) -> None:
         if review.get("score") is not None:
             task.review_score = review["score"]
 
-        # Don't duplicate rows on a re-run of the same task_id.
         already_written = {
             row[0] for row in (
                 await db.execute(select(CodeOutput.file_path).where(CodeOutput.task_id == task_id))
@@ -196,9 +177,6 @@ async def _persist_final_state(task_id: str, final_state: dict) -> None:
 
 
 async def run_task_workflow(task_id: str) -> dict:
-    """Entry point celery_worker.py calls. Runs the whole pipeline for one
-    task, writes the result back to Postgres, and clears Tier-1 memory now
-    that the task is finished."""
     state, task = await _load_initial_state(task_id)
     graph = _get_graph()
 
