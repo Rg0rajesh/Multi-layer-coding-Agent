@@ -1,18 +1,14 @@
-# backend/agents/context_curator.py
 """
-Context Curator (C6) — last stop before a task's session log disappears
-for good. Skims the full run, tags anything worth keeping as an
-architectural_decision or known_bug, and writes only those into long-term
-project memory. Everything else — the back-and-forth, the false starts,
-the "never mind, that worked" — gets dropped on purpose.
-
-This is what fixes the v1 gap where known bugs kept getting rediscovered:
-Tier 2 used to take writes from anywhere, so it slowly filled with noise.
-Now the only door in is this one.
+Context Curator — the only component allowed to promote task information into
+long-term project memory. It combines conservative LLM curation with
+ deterministic safety facts so important failures are not lost when the LLM
+is unavailable.
 """
 from __future__ import annotations
 
 import logging
+
+from sqlalchemy import select
 
 from database import async_session_factory
 from memory.project_memory import ProjectMemory
@@ -24,13 +20,13 @@ from workflow.state import WorkflowState
 logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """You are CURATOR, the memory-curation agent for AGENTX.
-You receive one finished task's full session log.
+You receive one finished task's workflow state.
 
 RULES:
-- Tag each notable event as architectural_decision, known_bug, or transient
-- Only architectural_decision and known_bug items get returned
-- Be conservative: when in doubt, tag transient rather than polluting long-term memory
-
+- Tag notable events as architectural_decision, known_bug, or transient
+- Only architectural_decision and known_bug items are promoted
+- Be conservative; do not store secrets, credentials, raw tokens, or personal data
+- Summaries must be short, factual, and reusable on future tasks
 OUTPUT: {"promote": [{"type": "known_bug", "summary": "..."}]}
 """
 
@@ -40,11 +36,8 @@ KEEPABLE_TAGS = {"architectural_decision", "known_bug"}
 async def context_curator_node(state: WorkflowState) -> dict:
     task_id = state["task_id"]
     project_id = state.get("project_id")
-
     await emit_log(task_id, "CONTEXT_CURATOR", "TASK", "→", "Curating session for long-term memory")
 
-    # Standalone runs with no project attached have nowhere for this to
-    # live — nothing wrong with the task, just nothing to curate against.
     promotable = await _curate(task_id, project_id, state) if project_id else []
 
     await emit_log(task_id, "SYSTEM", "PASS", "↑", "Task finalised. All 10 agents complete.")
@@ -52,33 +45,78 @@ async def context_curator_node(state: WorkflowState) -> dict:
 
 
 async def _curate(task_id: str, project_id: str, state: WorkflowState) -> list[dict]:
+    candidates: list[dict] = []
+
     try:
-        tagged = await generate_json(system=SYSTEM_PROMPT, user=_session_transcript(state))
+        tagged = await generate_json(system=SYSTEM_PROMPT, user=_session_transcript(state), temperature=0.0)
+        for item in tagged.get("promote", []):
+            if (
+                isinstance(item, dict)
+                and item.get("type") in KEEPABLE_TAGS
+                and isinstance(item.get("summary"), str)
+                and item["summary"].strip()
+            ):
+                candidates.append({
+                    "type": item["type"],
+                    "summary": item["summary"].strip(),
+                    "source_task_id": task_id,
+                })
     except LLMGenerationError as exc:
-        logger.warning("Curator couldn't tag session for task %s: %s", task_id, exc)
-        await emit_log(task_id, "CONTEXT_CURATOR", "WARN", "▲", "Curation skipped — model output unusable")
-        return []
+        logger.warning("Curator model unavailable for task %s: %s", task_id, exc)
+        await emit_log(task_id, "CONTEXT_CURATOR", "WARN", "▲", "LLM curation unavailable; deterministic facts retained")
 
-    promotable = [
-        {**item, "source_task_id": task_id}
-        for item in tagged.get("promote", [])
-        if item.get("type") in KEEPABLE_TAGS and item.get("summary")
-    ]
+    # Deterministic facts are high-confidence and should survive an LLM outage.
+    test_results = state.get("test_results") or {}
+    if test_results.get("failed", 0) or test_results.get("error"):
+        candidates.append({
+            "type": "known_bug",
+            "summary": f"Task ended with failing tests: {test_results.get('failures', [])[:3]}",
+            "source_task_id": task_id,
+        })
 
+    if not state.get("safety_passed", True):
+        report = state.get("safety_report") or {}
+        candidates.append({
+            "type": "known_bug",
+            "summary": f"Security findings detected: {(report.get('findings') or [])[:3]}",
+            "source_task_id": task_id,
+        })
+
+    promotable = _sanitize(candidates)
     await _persist(project_id, task_id, promotable)
 
     await emit_log(
-        task_id, "CONTEXT_CURATOR", "PASS", "✓",
-        f"{len(promotable)} item(s) promoted to project memory" if promotable
-        else "Nothing worth keeping long-term this run",
+        task_id,
+        "CONTEXT_CURATOR",
+        "PASS",
+        "✓",
+        f"{len(promotable)} item(s) promoted to project memory" if promotable else "Nothing worth keeping long-term this run",
     )
     return promotable
 
 
+def _sanitize(items: list[dict]) -> list[dict]:
+    result = []
+    seen = set()
+    secret_markers = ("password", "secret", "api_key", "access_token", "refresh_token", "private_key")
+    for item in items:
+        summary = item.get("summary", "").strip()
+        lowered = summary.lower()
+        if not summary or any(marker in lowered for marker in secret_markers):
+            continue
+        key = (item["type"], lowered)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append({**item, "summary": summary[:1000]})
+    return result
+
+
 def _session_transcript(state: WorkflowState) -> str:
-    # messages accumulates across every node via operator.add — closest
-    # thing we have to "the full session log" the prompt asks for.
-    return "\n".join(str(m) for m in state.get("messages", []))
+    return "\n".join(str(m) for m in state.get("messages", [])) + (
+        f"\nFinal test results: {state.get('test_results', {})}"
+        f"\nFinal security report: {state.get('safety_report', {})}"
+    )
 
 
 async def _persist(project_id: str, task_id: str, items: list[dict]) -> None:
@@ -87,6 +125,15 @@ async def _persist(project_id: str, task_id: str, items: list[dict]) -> None:
 
     async with async_session_factory() as db:
         for item in items:
+            existing = await db.scalar(
+                select(CuratedMemory).where(
+                    CuratedMemory.project_id == project_id,
+                    CuratedMemory.tag == item["type"],
+                    CuratedMemory.summary == item["summary"],
+                ).limit(1)
+            )
+            if existing:
+                continue
             db.add(CuratedMemory(
                 project_id=project_id,
                 source_task_id=task_id,
@@ -95,9 +142,6 @@ async def _persist(project_id: str, task_id: str, items: list[dict]) -> None:
             ))
         await db.commit()
 
-    # curated_memory above is the source of truth; this is just the
-    # searchable index over it. If Chroma hiccups, the Postgres rows
-    # already landed — nothing here is lost, just not queryable yet.
     project_memory = ProjectMemory(project_id)
     for item in items:
         await project_memory.promote_from_curated(item)
