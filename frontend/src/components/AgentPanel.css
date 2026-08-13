@@ -1,0 +1,54 @@
+.agent-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  transition: border-color 160ms ease;
+}
+
+.agent-panel--running {
+  border-color: var(--border-strong);
+}
+
+.agent-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.agent-panel__name {
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+.agent-panel__subtask {
+  margin: 0;
+  min-height: 2.6em;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  line-height: 1.3;
+}
+
+.agent-panel__progress {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.agent-panel__progress-bar {
+  height: 100%;
+  background: var(--fill);
+  transition: width 240ms ease;
+}
+
+.agent-panel__duration {
+  align-self: flex-end;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-tertiary);
+}
