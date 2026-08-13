@@ -1,7 +1,6 @@
 """
-Tester — writes a test suite and, for Python, actually runs it against a
-scratch copy of the generated files instead of trusting the model's own
-pass/fail claim.
+Tester — generates tests and, for Python, executes them against a scratch
+copy of the generated files instead of trusting the model's pass/fail claim.
 """
 from __future__ import annotations
 
@@ -21,12 +20,13 @@ logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """You are TESTER, the QA expert for AGENTX.
 
-Return ONLY one valid JSON object. Do not use markdown or explanations.
+RETURN ONLY ONE VALID JSON OBJECT.
+Never return markdown, code fences, explanations, or text outside the JSON.
 
 Required JSON shape:
 {
   "test_files": {
-    "test_example.py": "complete test source code"
+    "tests/test_example.py": "complete executable pytest source code"
   },
   "test_results": {
     "total": 0,
@@ -37,12 +37,13 @@ Required JSON shape:
 }
 
 Rules:
-- Generate executable pytest files for the supplied Python code.
-- Aim for at least 3 happy-path and 3 edge-case tests per function when practical.
-- Keep tests concise enough to fit the response.
-- test_files values must contain complete source code strings.
-- test_results is only the model's initial report; AGENTX will execute pytest itself.
-- Never return text outside the JSON object.
+- Generate executable pytest files for the supplied implementation.
+- Test the actual functions/classes present in the supplied files.
+- Include normal cases, edge cases, and invalid-input cases when applicable.
+- Do not invent APIs that do not exist in the implementation.
+- test_files values must be complete source-code strings.
+- test_results is only an initial model report; AGENTX executes pytest itself.
+- The JSON must start with { and end with }.
 """
 
 PYTEST_TIMEOUT_SECONDS = 60
@@ -58,10 +59,10 @@ async def tester_node(state: WorkflowState) -> dict:
         result = await generate_json(
             system=SYSTEM_PROMPT,
             user=(
-                "Files to test:\n"
+                "Implementation files to test:\n"
                 f"{code_files}\n\n"
                 f"Language: {state.get('language') or 'python'}\n\n"
-                "Return the complete pytest test files as JSON."
+                "Generate complete executable test files as ONE JSON object."
             ),
             temperature=0.0,
         )
@@ -76,27 +77,42 @@ async def tester_node(state: WorkflowState) -> dict:
             "TESTER",
             "ERROR",
             "✗",
-            "Couldn't generate tests: model did not return valid JSON after retry",
+            "Couldn't generate tests: model did not return valid JSON after retries",
         )
         raise
 
     test_files = result.get("test_files", {})
-    if not isinstance(test_files, dict):
+    if not isinstance(test_files, dict) or not test_files:
         raise LLMGenerationError(
-            "Tester returned an invalid test_files structure",
+            "Tester returned no test files",
+            raw_response=str(result),
+        )
+
+    clean_test_files: dict[str, str] = {}
+    for path, content in test_files.items():
+        if not isinstance(path, str) or not isinstance(content, str):
+            continue
+        if path.startswith("/") or ".." in path.replace("\\", "/").split("/"):
+            logger.warning("Ignoring unsafe tester path: %s", path)
+            continue
+        clean_test_files[path] = content
+
+    if not clean_test_files:
+        raise LLMGenerationError(
+            "Tester returned no valid test files",
             raw_response=str(result),
         )
 
     if (state.get("language") or "").lower() == "python":
         await log_tool_call(task_id, "pytest")
-        test_results = await _run_pytest(code_files, test_files)
+        test_results = await _run_pytest(code_files, clean_test_files)
     else:
         test_results = result.get(
             "test_results",
             {"total": 0, "passed": 0, "failed": 0, "failures": []},
         )
 
-    passed = test_results.get("failed", 0) == 0
+    passed = test_results.get("failed", 0) == 0 and test_results.get("error") is None
     await emit_log(
         task_id,
         "TESTER",
@@ -143,9 +159,8 @@ def _run_pytest_sync(root: Path) -> dict:
         return {
             "total": 0,
             "passed": 0,
-            "failed": 0,
-            "failures": [],
-            "error": "pytest not available",
+            "failed": 1,
+            "failures": [{"error": "pytest not available"}],
         }
 
     return _parse_pytest_output(proc.stdout + proc.stderr)
@@ -155,12 +170,15 @@ def _parse_pytest_output(output: str) -> dict:
     passed = int(m.group(1)) if (m := re.search(r"(\d+) passed", output)) else 0
     failed = int(m.group(1)) if (m := re.search(r"(\d+) failed", output)) else 0
     errored = int(m.group(1)) if (m := re.search(r"(\d+) error", output)) else 0
+    skipped = int(m.group(1)) if (m := re.search(r"(\d+) skipped", output)) else 0
+
     failures = re.findall(r"FAILED (\S+) - (.+)", output)
 
     return {
-        "total": passed + failed + errored,
+        "total": passed + failed + errored + skipped,
         "passed": passed,
         "failed": failed + errored,
+        "skipped": skipped,
         "failures": [
             {"test": name, "reason": reason}
             for name, reason in failures
