@@ -1,13 +1,7 @@
-# backend/agents/grounding_agent.py
 """
-Grounding agent (C8) — checks the Planner's plan against what the repo
-actually looks like before Human ever sees it.
-
-Deliberately not an LLM call: a model that's already drifted toward
-telling the user what they want to hear can't be trusted to grade its
-own drift, so this stays a plain embedding-similarity check against real
-repo facts (file paths, curated memory, last test run) instead of asking
-another model "does this plan look right to you."
+Grounding agent — validates the Planner's claims against repository state
+before Human approval. Grounding is a safety signal, so infrastructure
+failures fail closed instead of silently declaring an ungrounded plan safe.
 """
 from __future__ import annotations
 
@@ -30,12 +24,7 @@ from workflow.state import WorkflowState
 
 logger = logging.getLogger(__name__)
 
-# Below this distance, a claim counts as backed by something real in the
-# repo. Chroma's default embedding function uses a roughly cosine-shaped
-# distance (lower = closer) — this number came from eyeballing real plans
-# against real repo state, not a formula. Tune it once actual runs exist.
 MAX_SUPPORTING_DISTANCE = 0.45
-
 SCRATCH_COLLECTION_PREFIX = "grounding_scratch_"
 
 
@@ -51,11 +40,10 @@ async def grounding_node(state: WorkflowState) -> dict:
 
     claims = _extract_claims(state.get("plan") or {})
     if not claims:
-        # An empty plan isn't Grounding's problem — Human will see it's
-        # empty regardless, no point spending a Chroma round trip on it.
-        result = GroundingResult(grounded=True)
+        result = GroundingResult(False, [{"claim": "Plan contains no verifiable subtasks", "reason": "empty_plan"}])
         await _persist_grounding_run(task_id, result)
-        return {"grounded": result.grounded, "unsupported_claims": result.unsupported_claims}
+        await emit_log(task_id, "GROUNDING", "ERROR", "✗", "Plan has no verifiable subtasks")
+        return {"grounded": False, "unsupported_claims": result.unsupported_claims}
 
     facts = await _read_repo_state(state.get("project_id"))
     result = await _check_grounding(claims, facts)
@@ -63,21 +51,11 @@ async def grounding_node(state: WorkflowState) -> dict:
     if result.grounded:
         await emit_log(task_id, "GROUNDING", "PASS", "✓", "Plan checks out against repo state")
     else:
-        await emit_log(
-            task_id, "GROUNDING", "WARN", "■",
-            f"{len(result.unsupported_claims)} unsupported claim(s) found",
-        )
+        await emit_log(task_id, "GROUNDING", "WARN", "■", f"{len(result.unsupported_claims)} unsupported claim(s) found")
 
     await _persist_grounding_run(task_id, result)
     return {"grounded": result.grounded, "unsupported_claims": result.unsupported_claims}
 
-
-# ---------------------------------------------------------------------------
-# Persistence — Grounding is deterministic and never wrote anything to the
-# DB before, which meant GET /agents/:id/grounding-report had nothing to
-# read. AgentRun.output_data is the natural home for it: same table Live
-# Monitor already polls for every other agent.
-# ---------------------------------------------------------------------------
 
 async def _persist_grounding_run(task_id: str, result: GroundingResult) -> None:
     async with async_session_factory() as db:
@@ -85,42 +63,30 @@ async def _persist_grounding_run(task_id: str, result: GroundingResult) -> None:
             task_id=task_id,
             agent_name="GROUNDING",
             agent_color="#00C896",
-            status="completed",
+            status="completed" if result.grounded else "failed",
             output_data={"grounded": result.grounded, "unsupported_claims": result.unsupported_claims},
         ))
         await db.commit()
 
 
-# ---------------------------------------------------------------------------
-# Claim extraction — turns a Planner subtask list into short statements we
-# can actually check, e.g. "Add JWT refresh endpoint (routers/auth.py)"
-# ---------------------------------------------------------------------------
-
 def _extract_claims(plan: dict) -> list[dict]:
     claims = []
     for subtask in plan.get("subtasks", []):
+        if not isinstance(subtask, dict):
+            continue
         file_path = subtask.get("file")
         description = subtask.get("description") or subtask.get("title") or ""
-
         if file_path and description:
-            claims.append({"text": f"{description} ({file_path})", "file": file_path})
+            claims.append({"text": f"{description} ({file_path})", "file": _normalize_path(file_path)})
         elif description:
             claims.append({"text": description, "file": None})
-
     return claims
 
-
-# ---------------------------------------------------------------------------
-# Repo facts — what actually exists right now. No git shell-out here on
-# purpose: code_outputs and curated_memory already track everything the
-# pipeline itself has written and learned, which is what a plan is
-# realistically going to reference.
-# ---------------------------------------------------------------------------
 
 @dataclass
 class RepoFacts:
     file_paths: list[str] = field(default_factory=list)
-    known_notes: list[str] = field(default_factory=list)  # curated_memory summaries
+    known_notes: list[str] = field(default_factory=list)
     last_test_summary: str | None = None
 
 
@@ -135,9 +101,7 @@ async def _read_repo_state(project_id: str | None) -> RepoFacts:
             .where(Task.project_id == project_id)
             .distinct()
         )
-        note_rows = await db.execute(
-            select(CuratedMemory.summary).where(CuratedMemory.project_id == project_id)
-        )
+        note_rows = await db.execute(select(CuratedMemory.summary).where(CuratedMemory.project_id == project_id))
         last_task = await db.scalar(
             select(Task)
             .where(Task.project_id == project_id, Task.status == "completed")
@@ -145,68 +109,80 @@ async def _read_repo_state(project_id: str | None) -> RepoFacts:
             .limit(1)
         )
 
-    last_test_summary = (
-        f"Last run: {last_task.tests_passed}/{last_task.test_count} tests passing"
-        if last_task is not None else None
-    )
-
     return RepoFacts(
-        file_paths=[row[0] for row in file_rows.all()],
-        known_notes=[row[0] for row in note_rows.all()],
-        last_test_summary=last_test_summary,
+        file_paths=[_normalize_path(row[0]) for row in file_rows.all() if row[0]],
+        known_notes=[row[0] for row in note_rows.all() if row[0]],
+        last_test_summary=(
+            f"Last run: {last_task.tests_passed}/{last_task.test_count} tests passing"
+            if last_task is not None else None
+        ),
     )
 
-
-# ---------------------------------------------------------------------------
-# Embedding similarity check — the actual "grounding" logic
-# ---------------------------------------------------------------------------
 
 async def _check_grounding(claims: list[dict], facts: RepoFacts) -> GroundingResult:
+    existing_paths = set(facts.file_paths)
+    unsupported: list[dict] = []
+    semantic_claims: list[dict] = []
+
+    for claim in claims:
+        path = claim.get("file")
+        if path:
+            if path in existing_paths:
+                semantic_claims.append(claim)
+            elif _looks_like_new_file(claim["text"]):
+                continue
+            else:
+                unsupported.append({"claim": claim["text"], "reason": "referenced_file_not_found", "file": path})
+        else:
+            semantic_claims.append(claim)
+
     documents = [*facts.file_paths, *facts.known_notes]
     if facts.last_test_summary:
         documents.append(facts.last_test_summary)
 
-    if not documents:
-        # Brand-new project, nothing to compare against yet — don't punish
-        # the first plan a project ever gets for having no history.
-        return GroundingResult(grounded=True)
+    if semantic_claims and not documents:
+        unsupported.extend({"claim": c["text"], "reason": "no_repo_evidence"} for c in semantic_claims)
+        return GroundingResult(grounded=not unsupported, unsupported_claims=unsupported)
 
-    try:
-        return await asyncio.to_thread(_score_claims, claims, documents)
-    except Exception:
-        # Chroma is meant to be a safety net here, not a hard gate — a
-        # hiccup shouldn't block the whole pipeline over it.
-        logger.warning("Grounding check failed, letting the plan through", exc_info=True)
-        return GroundingResult(grounded=True)
+    if semantic_claims:
+        try:
+            semantic_result = await asyncio.to_thread(_score_claims, semantic_claims, documents)
+        except Exception as exc:
+            logger.error("Grounding infrastructure failed for plan", exc_info=True)
+            semantic_result = GroundingResult(False, [{"reason": "grounding_service_error", "error": str(exc)}])
+        unsupported.extend(semantic_result.unsupported_claims)
+
+    return GroundingResult(grounded=not unsupported, unsupported_claims=unsupported)
 
 
 def _score_claims(claims: list[dict], documents: list[str]) -> GroundingResult:
     client = get_chroma_client()
     collection_name = f"{SCRATCH_COLLECTION_PREFIX}{uuid.uuid4().hex}"
     collection = client.create_collection(collection_name)
-
     try:
         collection.add(ids=[str(i) for i in range(len(documents))], documents=documents)
-
         unsupported = []
         for claim in claims:
-            if claim["file"] and _looks_like_new_file(claim["text"]) and claim["file"] not in documents:
-                continue  # creating something new is expected to miss — that's not what we're checking
-
             result = collection.query(query_texts=[claim["text"]], n_results=1)
             distances = result.get("distances", [[]])[0]
             best_distance = distances[0] if distances else float("inf")
-
             if best_distance > MAX_SUPPORTING_DISTANCE:
-                unsupported.append({"claim": claim["text"], "closest_distance": round(best_distance, 3)})
-
+                unsupported.append({
+                    "claim": claim["text"],
+                    "closest_distance": round(best_distance, 3),
+                    "reason": "semantic_evidence_below_threshold",
+                })
         return GroundingResult(grounded=not unsupported, unsupported_claims=unsupported)
     finally:
         client.delete_collection(collection_name)
 
 
-_NEW_FILE_HINTS = re.compile(r"\b(create|add|new)\b", re.IGNORECASE)
+_NEW_FILE_HINTS = re.compile(r"\b(create|add|new|implement)\b", re.IGNORECASE)
 
 
 def _looks_like_new_file(claim_text: str) -> bool:
     return bool(_NEW_FILE_HINTS.search(claim_text))
+
+
+def _normalize_path(path: str) -> str:
+    return path.replace("\\", "/").lstrip("./")
