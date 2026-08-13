@@ -1,10 +1,8 @@
 // frontend/src/hooks/useWebSocket.ts
 import { useEffect, useRef, useState, useCallback } from "react";
+import { getAccessToken, refreshAccessToken } from "../api/client";
 
 const WS_BASE_URL = import.meta.env.VITE_WS_URL ?? "ws://localhost:8000";
-
-// Backend closes idle sockets and Ollama cold-starts can stall a task for
-// a while — reconnect instead of just giving up on the first drop.
 const MAX_RECONNECT_ATTEMPTS = 5;
 const BASE_RECONNECT_DELAY_MS = 1000;
 
@@ -16,16 +14,9 @@ interface UseWebSocketResult<T> {
   send: (data: unknown) => void;
 }
 
-/**
- * Thin wrapper around a task's live WS channel. Doesn't try to interpret
- * what comes through — routers/websocket.py already tags every payload
- * with a `type` field, so parsing that belongs to whoever's consuming
- * this (see useAgentStream.ts), not here.
- */
 export function useWebSocket<T = unknown>(taskId: string | null): UseWebSocketResult<T> {
   const [status, setStatus] = useState<WsStatus>("connecting");
   const [lastMessage, setLastMessage] = useState<T | null>(null);
-
   const socketRef = useRef<WebSocket | null>(null);
   const attemptsRef = useRef(0);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>();
@@ -38,7 +29,13 @@ export function useWebSocket<T = unknown>(taskId: string | null): UseWebSocketRe
     const socket = new WebSocket(`${WS_BASE_URL}/ws/task/${taskId}`);
     socketRef.current = socket;
 
-    socket.onopen = () => {
+    socket.onopen = async () => {
+      const token = getAccessToken() ?? await refreshAccessToken();
+      if (!token || socket.readyState !== WebSocket.OPEN) {
+        socket.close(1008, "Authentication required");
+        return;
+      }
+      socket.send(JSON.stringify({ type: "auth", token }));
       attemptsRef.current = 0;
       setStatus("open");
     };
@@ -56,7 +53,6 @@ export function useWebSocket<T = unknown>(taskId: string | null): UseWebSocketRe
     socket.onclose = () => {
       setStatus("closed");
       if (closedByUs.current) return;
-
       if (attemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
         const delay = BASE_RECONNECT_DELAY_MS * 2 ** attemptsRef.current;
         attemptsRef.current += 1;
@@ -68,7 +64,6 @@ export function useWebSocket<T = unknown>(taskId: string | null): UseWebSocketRe
   useEffect(() => {
     closedByUs.current = false;
     connect();
-
     return () => {
       closedByUs.current = true;
       clearTimeout(reconnectTimer.current);
