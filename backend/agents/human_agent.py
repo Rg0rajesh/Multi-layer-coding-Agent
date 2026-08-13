@@ -94,7 +94,11 @@ async def human_approval_node(state: WorkflowState) -> dict:
     if decision == "edit":
         edited_plan = payload if isinstance(payload, dict) else plan
         await emit_log(task_id, "HUMAN", "TASK", "✎", "Plan edited by human, re-approved")
-        await r.set(_approval_plan_key(task_id), json.dumps(edited_plan), ex=APPROVAL_PLAN_TTL_SECONDS)
+        # The edit decision also approves the plan. Do NOT recreate the
+        # pending-plan key here: otherwise the workflow continues while the
+        # frontend keeps polling and incorrectly shows the approval panel
+        # after the task has already completed.
+        await r.delete(_approval_plan_key(task_id))
         return {"plan": edited_plan, "plan_approved": True, "human_interventions": interventions}
 
     await emit_log(task_id, "HUMAN", "WARN", "✗", f"Plan rejected: {payload or 'no reason given'}")
