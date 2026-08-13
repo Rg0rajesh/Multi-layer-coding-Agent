@@ -1,4 +1,4 @@
-﻿"""
+"""
 Tester — writes a test suite and, for Python, actually runs it against a
 scratch copy of the generated files instead of trusting the model's own
 pass/fail claim.
@@ -20,10 +20,29 @@ from workflow.state import WorkflowState
 logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """You are TESTER, the QA expert for AGENTX.
-RULES:
-- At minimum 3 happy-path + 3 edge-case tests per function
-- Report failures with exact line, expected vs actual, suggested fix
-OUTPUT: {"test_files": {...}, "test_results": {"total": 12, "passed": 10, "failed": 2, "failures": [...]}}
+
+Return ONLY one valid JSON object. Do not use markdown or explanations.
+
+Required JSON shape:
+{
+  "test_files": {
+    "test_example.py": "complete test source code"
+  },
+  "test_results": {
+    "total": 0,
+    "passed": 0,
+    "failed": 0,
+    "failures": []
+  }
+}
+
+Rules:
+- Generate executable pytest files for the supplied Python code.
+- Aim for at least 3 happy-path and 3 edge-case tests per function when practical.
+- Keep tests concise enough to fit the response.
+- test_files values must contain complete source code strings.
+- test_results is only the model's initial report; AGENTX will execute pytest itself.
+- Never return text outside the JSON object.
 """
 
 PYTEST_TIMEOUT_SECONDS = 60
@@ -34,28 +53,55 @@ async def tester_node(state: WorkflowState) -> dict:
     await emit_log(task_id, "TESTER", "TASK", "→", "Writing tests")
 
     code_files = state.get("code_files", {})
+
     try:
         result = await generate_json(
             system=SYSTEM_PROMPT,
-            user=f"Files to test:\n{code_files}\nLanguage: {state.get('language')}",
+            user=(
+                "Files to test:\n"
+                f"{code_files}\n\n"
+                f"Language: {state.get('language') or 'python'}\n\n"
+                "Return the complete pytest test files as JSON."
+            ),
+            temperature=0.0,
         )
     except LLMGenerationError as exc:
-        await emit_log(task_id, "TESTER", "ERROR", "✗", f"Couldn't generate tests: {exc}")
+        logger.error(
+            "Tester JSON generation failed: %s; raw=%r",
+            exc,
+            exc.raw_response[:1000] if exc.raw_response else "",
+        )
+        await emit_log(
+            task_id,
+            "TESTER",
+            "ERROR",
+            "✗",
+            "Couldn't generate tests: model did not return valid JSON after retry",
+        )
         raise
 
     test_files = result.get("test_files", {})
+    if not isinstance(test_files, dict):
+        raise LLMGenerationError(
+            "Tester returned an invalid test_files structure",
+            raw_response=str(result),
+        )
 
     if (state.get("language") or "").lower() == "python":
         await log_tool_call(task_id, "pytest")
         test_results = await _run_pytest(code_files, test_files)
     else:
-        # Non-Python: no local runner wired up yet, fall back to the model's
-        # own report rather than pretending we verified it.
-        test_results = result.get("test_results", {"total": 0, "passed": 0, "failed": 0, "failures": []})
+        test_results = result.get(
+            "test_results",
+            {"total": 0, "passed": 0, "failed": 0, "failures": []},
+        )
 
     passed = test_results.get("failed", 0) == 0
     await emit_log(
-        task_id, "TESTER", "PASS" if passed else "WARN", "✓" if passed else "✗",
+        task_id,
+        "TESTER",
+        "PASS" if passed else "WARN",
+        "✓" if passed else "✗",
         f"{test_results.get('passed', 0)}/{test_results.get('total', 0)} tests passed",
     )
 
@@ -72,7 +118,7 @@ async def _run_pytest(code_files: dict, test_files: dict) -> dict:
         for relative_path, content in {**code_files, **test_files}.items():
             file_path = root / relative_path
             file_path.parent.mkdir(parents=True, exist_ok=True)
-            file_path.write_text(content, encoding="utf-8")
+            file_path.write_text(str(content), encoding="utf-8")
         return await asyncio.to_thread(_run_pytest_sync, root)
 
 
@@ -80,13 +126,27 @@ def _run_pytest_sync(root: Path) -> dict:
     try:
         proc = subprocess.run(
             ["pytest", "-q", "--tb=short", str(root)],
-            capture_output=True, text=True, timeout=PYTEST_TIMEOUT_SECONDS, cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=PYTEST_TIMEOUT_SECONDS,
+            cwd=root,
         )
     except subprocess.TimeoutExpired:
-        return {"total": 0, "passed": 0, "failed": 1, "failures": [{"error": "Test run timed out"}]}
+        return {
+            "total": 0,
+            "passed": 0,
+            "failed": 1,
+            "failures": [{"error": "Test run timed out"}],
+        }
     except FileNotFoundError:
         logger.error("pytest isn't installed in this environment")
-        return {"total": 0, "passed": 0, "failed": 0, "failures": [], "error": "pytest not available"}
+        return {
+            "total": 0,
+            "passed": 0,
+            "failed": 0,
+            "failures": [],
+            "error": "pytest not available",
+        }
 
     return _parse_pytest_output(proc.stdout + proc.stderr)
 
@@ -101,5 +161,8 @@ def _parse_pytest_output(output: str) -> dict:
         "total": passed + failed + errored,
         "passed": passed,
         "failed": failed + errored,
-        "failures": [{"test": name, "reason": reason} for name, reason in failures],
+        "failures": [
+            {"test": name, "reason": reason}
+            for name, reason in failures
+        ],
     }
