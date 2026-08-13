@@ -60,6 +60,7 @@ async def close_client() -> None:
 
 _MAX_CONNECTION_RETRIES = 2
 _RETRY_BACKOFF_SECONDS = 1.5
+_MAX_JSON_ATTEMPTS = 2
 
 
 async def chat(
@@ -80,7 +81,7 @@ async def chat(
         "stream": False,
         "options": {
             "temperature": temperature,
-            "num_predict": 400,
+            "num_predict": 1200 if json_mode else 400,
         },
     }
 
@@ -142,12 +143,12 @@ async def chat(
     raise OllamaUnavailableError(str(last_error))
 
 
-_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
+_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
 
 
 def _extract_json(text: str) -> dict[str, Any]:
     """Extract a JSON object from normal JSON or fenced/model-prefixed text."""
-    candidate = text.strip()
+    candidate = text.strip().lstrip("\ufeff")
 
     fence_match = _JSON_FENCE_RE.search(candidate)
     if fence_match:
@@ -183,15 +184,44 @@ async def generate_json(
     model: str | None = None,
     temperature: float = 0.2,
 ) -> dict[str, Any]:
-    """Generate and parse a JSON object for planner/reviewer/tester agents."""
-    raw = await chat(
-        system=system,
-        user=user,
-        model=model,
-        temperature=temperature,
-        json_mode=True,
-    )
-    return _extract_json(raw)
+    """Generate a JSON object with one automatic correction attempt.
+
+    Qwen 3B occasionally ignores the requested structure even when Ollama's
+    JSON mode is enabled. The second request explicitly reminds the model that
+    the response must be one complete JSON object. This is a generation retry,
+    not a connection retry.
+    """
+    last_error: LLMGenerationError | None = None
+    current_user = user
+
+    for attempt in range(1, _MAX_JSON_ATTEMPTS + 1):
+        try:
+            raw = await chat(
+                system=system,
+                user=current_user,
+                model=model,
+                temperature=0.0 if attempt > 1 else temperature,
+                json_mode=True,
+            )
+            return _extract_json(raw)
+        except LLMGenerationError as exc:
+            last_error = exc
+            logger.warning(
+                "Invalid JSON from model (attempt %d/%d): %s",
+                attempt,
+                _MAX_JSON_ATTEMPTS,
+                exc,
+            )
+            if attempt < _MAX_JSON_ATTEMPTS:
+                current_user = (
+                    f"{user}\n\n"
+                    "IMPORTANT CORRECTION: Your previous response was unusable. "
+                    "Return ONLY ONE complete valid JSON OBJECT. No markdown, no "
+                    "explanation, no code fence, and no text before or after the JSON."
+                )
+
+    assert last_error is not None
+    raise last_error
 
 
 async def classify_risk(
