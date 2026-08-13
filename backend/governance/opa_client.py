@@ -66,7 +66,10 @@ async def opa_evaluate(policy_path: str, *, input_doc: dict) -> dict:
 
 
 async def opa_issue_token(task_id: str, needed_scope: dict) -> IdentityToken:
-    decision = await opa_evaluate("agentx.authz.scope", input_doc=needed_scope)
+    # Query the package so OPA returns the allowed_scope rule inside result.
+    # Querying agentx.authz.scope asks for a non-existent `scope` rule and
+    # therefore returns {} even though the policy engine itself is healthy.
+    decision = await opa_evaluate("agentx.authz", input_doc=needed_scope)
     allowed_scope = decision.get("allowed_scope")
     if not isinstance(allowed_scope, dict):
         raise PolicyEvaluationError("OPA returned no allowed_scope")
