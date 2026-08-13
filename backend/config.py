@@ -1,4 +1,3 @@
-﻿# backend/config.py
 from __future__ import annotations
 
 from functools import lru_cache
@@ -22,8 +21,9 @@ class Settings(BaseSettings):
     ollama_model: str = "qwen2.5-coder:3b"
     llama_guard_model: str = "llama-guard3:1b"
 
-    ollama_timeout_seconds: float = 120.0
-    ollama_max_concurrent_requests: int = 2
+    # Ollama settings
+    ollama_timeout_seconds: float = 180.0
+    ollama_max_concurrent_requests: int = 1
 
     opa_url: str = "http://localhost:8181"
 
@@ -44,10 +44,7 @@ class Settings(BaseSettings):
     sendgrid_api_key: str | None = None
     slack_webhook_url: str | None = None
 
-    # CORS — comma-separated in .env (e.g. "http://a.com,http://b.com") or a
-    # JSON array. `NoDecode` stops pydantic-settings from trying to
-    # json.loads() the raw env string itself — that was crashing the app
-    # before our validator below ever got a chance to run.
+    # CORS
     cors_origins: Annotated[list[str], NoDecode] = ["http://localhost:3000"]
 
     @field_validator("cors_origins", mode="before")
