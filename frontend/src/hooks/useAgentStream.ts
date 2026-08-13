@@ -1,21 +1,12 @@
 // frontend/src/hooks/useAgentStream.ts
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
+import { logsApi } from "../api";
 import { useWebSocket } from "./useWebSocket";
 
-// Mirrors backend/services/log_service.py::AGENT_COLORS — kept in sync
-// manually since the frontend doesn't share that module.
 export const AGENT_COLORS: Record<string, string> = {
-  PLANNER: "#E8FF47",
-  CODER: "#00C896",
-  TESTER: "#FF6B35",
-  REVIEWER: "#FF3C3C",
-  SECURITY: "#FF3C3C",
-  HUMAN: "#FFFFFF",
-  SYSTEM: "#888888",
-  GUARDRAIL: "#FF3C3C",
-  IDENTITY_BROKER: "#E8FF47",
-  GROUNDING: "#00C896",
-  CONTEXT_CURATOR: "#888888",
+  PLANNER: "#E8FF47", CODER: "#00C896", TESTER: "#FF6B35", REVIEWER: "#FF3C3C",
+  SECURITY: "#FF3C3C", HUMAN: "#FFFFFF", SYSTEM: "#888888", GUARDRAIL: "#FF3C3C",
+  IDENTITY_BROKER: "#E8FF47", GROUNDING: "#00C896", CONTEXT_CURATOR: "#888888",
 };
 
 interface RawLogMessage {
@@ -59,7 +50,35 @@ export function useAgentStream(taskId: string | null) {
   const [lines, setLines] = useState<AgentLogLine[]>([]);
   const [agentStatuses, setAgentStatuses] = useState<Record<string, AgentStatus>>({});
 
-  useMemo(() => {
+  useEffect(() => {
+    if (!taskId) {
+      setLines([]);
+      return;
+    }
+
+    let cancelled = false;
+    logsApi.list(taskId, { page: 1, page_size: MAX_LOG_LINES })
+      .then((response) => {
+        if (cancelled) return;
+        const history = [...(response.items ?? [])].reverse().map((entry) => ({
+          id: `history-${entry.id}`,
+          agent: entry.agent_name,
+          level: entry.log_level,
+          icon: entry.prefix_icon ?? "",
+          message: entry.message,
+          timestamp: entry.created_at,
+          color: AGENT_COLORS[entry.agent_name] ?? "#FFFFFF",
+        }));
+        setLines(history.slice(-MAX_LOG_LINES));
+      })
+      .catch(() => {
+        if (!cancelled) setLines([]);
+      });
+
+    return () => { cancelled = true; };
+  }, [taskId]);
+
+  useEffect(() => {
     if (!lastMessage) return;
 
     setAgentStatuses((prev) => ({
@@ -74,7 +93,7 @@ export function useAgentStream(taskId: string | null) {
     if (lastMessage.type !== "log") return;
 
     setLines((prev) => {
-      const next: AgentLogLine[] = [
+      const next = [
         ...prev,
         {
           id: `${lastMessage.timestamp}-${prev.length}`,
@@ -88,7 +107,6 @@ export function useAgentStream(taskId: string | null) {
       ];
       return next.length > MAX_LOG_LINES ? next.slice(next.length - MAX_LOG_LINES) : next;
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastMessage]);
 
   return { connectionStatus: status, lines, agentStatuses };
