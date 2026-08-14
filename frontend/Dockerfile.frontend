@@ -4,10 +4,10 @@ WORKDIR /app
 
 COPY package*.json ./
 
-RUN npm install
+RUN npm install --include=dev && test -x /app/node_modules/.bin/vite
 
 COPY . .
 
 EXPOSE 3000
 
-CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "3000"]
+CMD ["sh", "-c", "npm install --include=dev && npm run dev -- --host 0.0.0.0 --port 3000"]
