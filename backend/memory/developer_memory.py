@@ -1,4 +1,3 @@
-﻿
 # backend/memory/developer_memory.py
 """
 Tier 3 — Developer Profile Memory (long-term).
@@ -80,7 +79,9 @@ class DeveloperMemory:
             return cached
 
         def _fetch() -> list[dict]:
-            return _get_mem0().get_all(user_id=self.user_id)
+            # Current Mem0 versions require entity scoping through filters
+            # for get_all(); top-level user_id is rejected.
+            return _get_mem0().get_all(filters={"user_id": self.user_id})
 
         try:
             entries = await asyncio.to_thread(_fetch)
