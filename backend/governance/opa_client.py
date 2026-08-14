@@ -67,8 +67,6 @@ async def opa_evaluate(policy_path: str, *, input_doc: dict) -> dict:
 
 async def opa_issue_token(task_id: str, needed_scope: dict) -> IdentityToken:
     # Query the package so OPA returns the allowed_scope rule inside result.
-    # Querying agentx.authz.scope asks for a non-existent `scope` rule and
-    # therefore returns {} even though the policy engine itself is healthy.
     decision = await opa_evaluate("agentx.authz", input_doc=needed_scope)
     allowed_scope = decision.get("allowed_scope")
     if not isinstance(allowed_scope, dict):
@@ -102,11 +100,38 @@ async def opa_issue_token(task_id: str, needed_scope: dict) -> IdentityToken:
     return token
 
 
+def _normalize_path(path: str) -> str:
+    return path.replace("\\", "/").lstrip("./")
+
+
+def resolve_scoped_file(target: str, allowed_files: list[str] | set[str]) -> str | None:
+    """Resolve a coder path to an explicitly approved path.
+
+    Exact matches are preferred. For compatibility with LLM-generated paths,
+    a short path such as ``App.tsx`` may resolve to a unique approved path
+    such as ``frontend/src/App.tsx``. This never grants a new file: the
+    returned path must already exist in the Identity Broker's scope.
+    """
+    normalized_target = _normalize_path(target)
+    normalized_allowed = [_normalize_path(path) for path in allowed_files if isinstance(path, str)]
+
+    if normalized_target in normalized_allowed:
+        return normalized_target
+
+    suffix = f"/{normalized_target}"
+    matches = [path for path in normalized_allowed if path.endswith(suffix)]
+    if len(matches) == 1:
+        return matches[0]
+
+    return None
+
+
 async def log_tool_call(task_id: str, tool: str, *, target: str | None = None) -> bool:
     """Authorize and record a tool attempt against the active token.
 
     Missing/expired credentials are DENIED. File operations additionally
     require the target path to be explicitly present in the OPA file scope.
+    A basename can only resolve to a unique path that was already approved.
     """
     async with async_session_factory() as db:
         token = (
@@ -126,16 +151,18 @@ async def log_tool_call(task_id: str, tool: str, *, target: str | None = None) -
         allowed_files = set(token.scope.get("files", []))
         not_expired = token.expires_at is not None and token.expires_at > now
         in_scope = not_expired and tool in allowed_tools
+        resolved_target = target
 
         if tool in {"file_read", "file_write"}:
-            normalized_target = (target or "").replace("\\", "/")
-            in_scope = in_scope and normalized_target in allowed_files
+            resolved_target = resolve_scoped_file(target or "", allowed_files)
+            in_scope = in_scope and resolved_target is not None
 
         token.tool_call_log = [
             *token.tool_call_log,
             {
                 "tool": tool,
                 "target": target,
+                "resolved_target": resolved_target,
                 "in_scope": in_scope,
                 "at": now.isoformat(),
             },
@@ -157,10 +184,25 @@ async def log_tool_call(task_id: str, tool: str, *, target: str | None = None) -
 
 def derive_scope(plan: dict) -> dict:
     subtasks = plan.get("subtasks", [])
-    touched_files = [
-        st["file"] for st in subtasks
-        if isinstance(st, dict) and st.get("file") and isinstance(st["file"], str)
-    ]
+    touched_files: list[str] = []
+
+    for subtask in subtasks:
+        if isinstance(subtask, dict):
+            file_path = subtask.get("file")
+            if isinstance(file_path, str) and file_path.strip():
+                touched_files.append(file_path.strip())
+
+    # Support human-edited plans that explicitly list files. These fields are
+    # additive; they never grant access to files outside the approved plan.
+    for key in ("files", "files_to_create", "files_to_modify", "touched_files"):
+        values = plan.get(key, [])
+        if isinstance(values, str):
+            values = [values]
+        if isinstance(values, list):
+            touched_files.extend(value.strip() for value in values if isinstance(value, str) and value.strip())
+
+    # Preserve order while removing duplicates.
+    touched_files = list(dict.fromkeys(touched_files))
 
     return {
         "requested_tools": ["file_read", "file_write", "pytest"],
