@@ -10,6 +10,7 @@ volumes:
   chroma_data:
   opa_data:
   postgres_data:
+  piston_packages:
 
 services:
   postgres:
@@ -64,16 +65,41 @@ services:
     entrypoint: ["sh", "-c", "pull_if_missing() { if OLLAMA_HOST=ollama:11434 ollama list | grep -q \"$1\"; then echo \"$1 already present, skipping pull\"; else echo \"Pulling $1 ...\"; OLLAMA_HOST=ollama:11434 ollama pull \"$1\"; fi; }; pull_if_missing qwen2.5-coder:3b && pull_if_missing llama-guard3:1b && pull_if_missing nomic-embed-text"]
     restart: "no"
 
-  # Isolated multi-language execution service. Piston uses Linux isolation,
-  # resource limits and disabled outbound network access for submitted code.
   piston:
     image: ghcr.io/engineer-man/piston:latest
     restart: unless-stopped
     privileged: true
     ports: ["2000:2000"]
     networks: [agentx-net]
+    volumes:
+      - piston_packages:/piston/packages
     tmpfs:
       - /piston/jobs:exec,nosuid,size=512m
+
+  # Installs common educational runtimes once into the persistent Piston volume.
+  # HTML/CSS are validated by AGENTX without a language runtime.
+  piston-runtime-init:
+    image: node:20-alpine
+    restart: "no"
+    depends_on:
+      piston: { condition: service_started }
+    networks: [agentx-net]
+    volumes:
+      - piston_packages:/piston/packages
+    command: >-
+      sh -c "apk add --no-cache git >/dev/null &&
+      git clone --depth 1 https://github.com/engineer-man/piston /tmp/piston >/dev/null 2>&1 &&
+      cd /tmp/piston/cli && npm ci --silent &&
+      node index.js -u http://piston:2000 ppman install python &&
+      node index.js -u http://piston:2000 ppman install java &&
+      node index.js -u http://piston:2000 ppman install javascript &&
+      node index.js -u http://piston:2000 ppman install typescript &&
+      node index.js -u http://piston:2000 ppman install c &&
+      node index.js -u http://piston:2000 ppman install c++ &&
+      node index.js -u http://piston:2000 ppman install go &&
+      node index.js -u http://piston:2000 ppman install rust &&
+      node index.js -u http://piston:2000 ppman install php &&
+      node index.js -u http://piston:2000 ppman install ruby"
 
   chromadb:
     image: chromadb/chroma:latest
