@@ -6,12 +6,17 @@ export interface CreateTaskPayload { title: string; description?: string; langua
 export interface TaskListParams { status?: string; priority?: string; language?: string; project_id?: string; search?: string; page?: number; page_size?: number; sort_by?: string; sort_desc?: boolean; }
 function toQuery(params: object): string { const usable = Object.entries(params).filter(([, v]) => v !== undefined && v !== ""); if (usable.length === 0) return ""; return "?" + usable.map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`).join("&"); }
 
+export interface CodeRunRequest { language: string; code: string; stdin?: string; filename?: string; extra_files?: { name: string; content: string }[]; }
+export interface CodeRunResult { language: string; version: string; compile: Record<string, unknown>; run: Record<string, unknown>; stdout: string; stderr: string; output: string; exit_code: number | null; signal: string | null; success: boolean; }
+
 export const tasksApi = {
   create: (payload: CreateTaskPayload) => api.post<Task>("/tasks", payload),
   get: (taskId: string) => api.get<Task>(`/tasks/${taskId}`),
   list: (params: TaskListParams = {}) => api.get<TaskListResponse>(`/tasks${toQuery(params)}`),
   update: (taskId: string, patch: Partial<CreateTaskPayload & { status: string }>) => api.patch<Task>(`/tasks/${taskId}`, patch),
   remove: (taskId: string) => api.delete<void>(`/tasks/${taskId}`),
+  runCode: (payload: CodeRunRequest) => api.post<CodeRunResult>("/tasks/run", payload),
+  runtimes: () => api.post<{ runtimes: { language: string; version: string; aliases?: string[] }[] }>("/tasks/runtimes", {}),
 };
 
 export const agentsApi = {
@@ -35,7 +40,7 @@ export const outputsApi = {
 export const logsApi = {
   list: (taskId: string, params: Record<string, unknown> = {}) => api.get<{ items: LogEntry[]; total: number; page: number; page_size: number }>(`/tasks/${taskId}/logs${toQuery(params)}`),
   resolve: (taskId: string, logId: number, note?: string) => api.patch<LogEntry>(`/tasks/${taskId}/logs/${logId}/resolve`, { note }),
-  analytics: (taskId: string) => api.get<{ total: number; unresolved: number; by_severity: Record<string, number>; by_agent: Record<string, number> }>(`/tasks/${taskId}/logs/analytics`,),
+  analytics: (taskId: string) => api.get<{ total: number; unresolved: number; by_severity: Record<string, number>; by_agent: Record<string, number> }>(`/tasks/${taskId}/logs/analytics`),
 };
 
 export const projectsApi = { list: () => api.get<Project[]>("/projects") };
