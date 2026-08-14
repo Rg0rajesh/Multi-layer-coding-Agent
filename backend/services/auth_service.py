@@ -31,6 +31,11 @@ GITHUB_EMAILS_URL = "https://api.github.com/user/emails"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 
+# A valid bcrypt hash used only for nonexistent-user timing equalization.
+# It is generated once when the process starts and is never stored in the DB.
+_DUMMY_PASSWORD = b"agentx-dummy-password-never-valid"
+_DUMMY_PASSWORD_HASH = bcrypt.hashpw(_DUMMY_PASSWORD, bcrypt.gensalt())
+
 
 # ---------------------------------------------------------------------------
 # Passwords
@@ -46,9 +51,18 @@ async def hash_password(raw: str) -> str:
 
 
 async def verify_password(raw: str, hashed: str) -> bool:
+    """Verify a password without allowing malformed DB hashes to crash login.
+
+    bcrypt.checkpw raises ValueError('Invalid salt') when the stored value is
+    not a valid bcrypt hash. Treat that exactly like a wrong password so a bad
+    legacy/corrupt database record results in HTTP 401 instead of HTTP 500.
+    """
     pwd_bytes = raw.encode("utf-8")[:72]
     hashed_bytes = hashed.encode("utf-8")
-    return await run_in_threadpool(bcrypt.checkpw, pwd_bytes, hashed_bytes)
+    try:
+        return await run_in_threadpool(bcrypt.checkpw, pwd_bytes, hashed_bytes)
+    except (ValueError, TypeError, UnicodeEncodeError):
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -100,15 +114,6 @@ async def get_current_user(
 
 # ---------------------------------------------------------------------------
 # Refresh tokens — opaque random string, only the SHA-256 digest hits the DB.
-#
-# We deliberately don't bcrypt these: bcrypt is slow on purpose so brute-
-# forcing a low-entropy human password is expensive, but a refresh token is
-# already 384 bits of secrets.token_urlsafe output — there's nothing to
-# brute-force. Bcrypt-hashing it would also mean no indexed lookup: you'd
-# have to pull every active session for a user and bcrypt-compare each one
-# (O(n) per refresh, and bcrypt-slow on top of that). SHA-256 gives a
-# deterministic digest we can index and look up directly (O(log n) on the
-# unique btree index already defined on token_hash).
 # ---------------------------------------------------------------------------
 
 def _hash_token(token: str) -> str:
@@ -153,8 +158,6 @@ async def rotate_refresh_token(
     if user is None or not user.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Account no longer active")
 
-    # Rotate: kill the old session, issue a fresh one. Stops a stolen
-    # refresh token from being replayed indefinitely once it's used once.
     session.is_active = False
     new_token = await issue_refresh_token(db, str(user.id), device_info, ip_address)
     await db.commit()
@@ -193,9 +196,6 @@ async def exchange_github_code(code: str) -> dict:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "GitHub rejected that code")
 
         auth_header = {"Authorization": f"Bearer {access_token}"}
-
-        # Profile + email list are independent calls — fire them together
-        # instead of waiting on one before starting the other.
         profile_resp, emails_resp = await asyncio.gather(
             client.get(GITHUB_USER_URL, headers=auth_header),
             client.get(GITHUB_EMAILS_URL, headers=auth_header),
@@ -268,7 +268,7 @@ async def find_or_create_oauth_user(db: AsyncSession, provider: str, profile: di
             email=profile["email"] or f"{provider}_{profile['provider_id']}@no-email.local",
             full_name=profile.get("full_name") or "New User",
             avatar_url=profile.get("avatar_url"),
-            is_verified=True,  # the OAuth provider already verified this email
+            is_verified=True,
         )
         setattr(user, f"{provider}_id", profile["provider_id"])
         db.add(user)
