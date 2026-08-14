@@ -47,12 +47,18 @@ def _get_redis() -> redis.Redis:
 
 
 def _memory_text(entry: Any) -> str:
-    """Mem0 releases may return dict entries or plain strings."""
     if isinstance(entry, str):
         return entry
     if isinstance(entry, dict):
         return str(entry.get("memory") or entry.get("text") or "")
     return str(entry) if entry is not None else ""
+
+
+def _normalise_entries(raw: Any) -> list[Any]:
+    """Mem0 get_all() has returned both list and {results: [...]} shapes."""
+    if isinstance(raw, dict):
+        raw = raw.get("results") or raw.get("memories") or []
+    return raw if isinstance(raw, list) else []
 
 
 class DeveloperMemory:
@@ -65,11 +71,12 @@ class DeveloperMemory:
         if cached is not None:
             return cached
 
-        def _fetch() -> list[Any]:
+        def _fetch() -> Any:
             return _get_mem0().get_all(filters={"user_id": self.user_id})
 
         try:
-            entries = await asyncio.to_thread(_fetch)
+            raw = await asyncio.to_thread(_fetch)
+            entries = _normalise_entries(raw)
         except Exception:
             logger.warning("Mem0 lookup failed for user %s, falling back to empty profile", self.user_id, exc_info=True)
             return {}
