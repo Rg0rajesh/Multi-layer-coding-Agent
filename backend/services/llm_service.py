@@ -111,10 +111,7 @@ async def chat(
                         )
 
             if not content:
-                raise LLMGenerationError(
-                    "Ollama returned an empty response",
-                    raw_response=str(body),
-                )
+                raise LLMGenerationError("Ollama returned an empty response", raw_response=str(body))
 
             return content
 
@@ -130,14 +127,11 @@ async def chat(
                 await asyncio.sleep(_RETRY_BACKOFF_SECONDS * attempt)
                 continue
 
-            raise OllamaUnavailableError(
-                f"Ollama unreachable after {attempt} attempts"
-            ) from exc
+            raise OllamaUnavailableError(f"Ollama unreachable after {attempt} attempts") from exc
 
         except httpx.HTTPStatusError as exc:
             raise LLMGenerationError(
-                f"Ollama returned {exc.response.status_code}: "
-                f"{exc.response.text[:300]}"
+                f"Ollama returned {exc.response.status_code}: {exc.response.text[:300]}"
             ) from exc
 
     raise OllamaUnavailableError(str(last_error))
@@ -149,7 +143,6 @@ _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORE
 def _extract_json(text: str) -> dict[str, Any]:
     """Extract one JSON object from normal, fenced, or prefixed model output."""
     candidate = text.strip().lstrip("\ufeff")
-
     fence_match = _JSON_FENCE_RE.search(candidate)
     if fence_match:
         candidate = fence_match.group(1).strip()
@@ -171,10 +164,7 @@ def _extract_json(text: str) -> dict[str, Any]:
         except json.JSONDecodeError:
             pass
 
-    raise LLMGenerationError(
-        "Model output wasn't valid JSON",
-        raw_response=text,
-    )
+    raise LLMGenerationError("Model output wasn't valid JSON", raw_response=text)
 
 
 async def generate_json(
@@ -209,26 +199,66 @@ async def generate_json(
             )
             if attempt < _MAX_JSON_ATTEMPTS:
                 current_user = (
-                    f"{user}\n\n"
-                    "IMPORTANT CORRECTION: The previous response was unusable. "
-                    "Return ONLY ONE complete JSON OBJECT. Do not use markdown, "
-                    "code fences, explanations, comments outside JSON, or extra text. "
-                    "The JSON must start with { and end with }. Preserve every "
-                    "required field and include complete source-code strings."
+                    f"{user}\n\nIMPORTANT CORRECTION: The previous response was unusable. "
+                    "Return ONLY ONE complete JSON OBJECT. Do not use markdown, code fences, "
+                    "explanations, comments outside JSON, or extra text. The JSON must start "
+                    "with { and end with }. Preserve every required field and include complete source-code strings."
                 )
 
     assert last_error is not None
     raise last_error
 
 
+# These phrases identify ordinary application-development requests. They are
+# used only as a conservative false-positive guard before the safety model.
+# A task must contain development intent and must not contain any of the
+# explicitly high-risk indicators below. This does NOT authorize tool use;
+# OPA/Identity Broker still controls every filesystem/tool operation later.
+_DEV_INTENT = re.compile(
+    r"\b(build|create|implement|develop|add|fix|refactor|update|test|debug|write|modify)\b"
+    r".*\b(app|application|frontend|backend|component|page|api|calculator|website|feature|test|code|ui|typescript|javascript|python|react)\b",
+    re.IGNORECASE | re.DOTALL,
+)
+_HIGH_RISK = re.compile(
+    r"\b(malware|ransomware|keylogger|credential\s*steal|password\s*steal|token\s*steal|"
+    r"exfiltrat(?:e|ion)|botnet|payload\s+delivery|persistence\s+mechanism|reverse\s+shell|"
+    r"bypass\s+(?:authentication|security|detection|antivirus)|disable\s+(?:security|antivirus)|"
+    r"destructive\s+command|delete\s+all\s+files|wipe\s+disk)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_unambiguously_benign_dev_task(task_description: str) -> bool:
+    text = " ".join(task_description.split())
+    return bool(_DEV_INTENT.search(text)) and not bool(_HIGH_RISK.search(text))
+
+
 async def classify_risk(
     task_description: str,
     prior_score: float = 0.0,
 ) -> dict[str, Any]:
-    """Classify an incoming task with the configured Llama Guard model."""
+    """Classify an incoming task without letting benign coding false positives
+    poison the rolling session score.
+
+    The deterministic check is intentionally narrow: it recognizes ordinary
+    application-development requests only when no high-risk intent is present.
+    All other requests still go through Llama Guard. Authorization is handled
+    separately by the Identity Broker/OPA layer.
+    """
+    if _is_unambiguously_benign_dev_task(task_description):
+        return {
+            "risk_score": 0,
+            "reason": "Ordinary application-development request with no high-risk indicators",
+        }
+
     system = (
-        "You are a safety classifier. "
+        "You are a safety classifier for a software-development agent. "
         "Classify the user's request as exactly one of: safe or unsafe. "
+        "Ordinary programming, frontend/backend development, debugging, testing, "
+        "UI work, calculators, parsers, localStorage, databases, APIs, and normal "
+        "software engineering are safe. Only classify unsafe when the request "
+        "meaningfully facilitates harmful activity such as malware, credential theft, "
+        "data exfiltration, destructive actions, unauthorized access, or security bypass. "
         "Output only one word: safe or unsafe."
     )
 
@@ -242,37 +272,12 @@ async def classify_risk(
     result = raw.strip().lower()
 
     if result.startswith("safe"):
-        return {
-            "risk_score": 0,
-            "reason": "Llama Guard classified the request as safe",
-        }
+        return {"risk_score": 0, "reason": "Llama Guard classified the request as safe"}
 
     if result.startswith("unsafe"):
-        return {
-            "risk_score": 100,
-            "reason": "Llama Guard classified the request as unsafe",
-        }
+        return {"risk_score": 100, "reason": "Llama Guard classified the request as unsafe"}
 
     raise LLMGenerationError(
         "Llama Guard returned an unexpected classification",
         raw_response=raw,
     )
-
-
-async def ensure_model_ready(model: str) -> None:
-    """Warm the requested model when it is not already listed by Ollama."""
-    try:
-        client = _get_client()
-        response = await client.get("/api/tags")
-        response.raise_for_status()
-        loaded = {m["name"] for m in response.json().get("models", [])}
-        if model not in loaded:
-            logger.info("Warming up %s — first call after this will be slow", model)
-            await chat(
-                system="You are a helper.",
-                user="ready?",
-                model=model,
-                temperature=0.0,
-            )
-    except (httpx.ConnectError, httpx.TimeoutException) as exc:
-        logger.warning("Couldn't warm up %s: %s", model, exc)
