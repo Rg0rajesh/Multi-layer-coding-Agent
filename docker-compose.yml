@@ -11,85 +11,185 @@ volumes:
   opa_data:
   postgres_data:
   piston_packages:
+  frontend_node_modules:
 
 services:
+
+  # ============================================================
+  # POSTGRES
+  # ============================================================
+
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+
     environment:
       POSTGRES_USER: agentx
       POSTGRES_PASSWORD: agentx_dev_pw_2026
       POSTGRES_DB: agentx_db
+
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./database/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
-    ports: ["5432:5432"]
-    networks: [agentx-net]
+
+    ports:
+      - "5432:5432"
+
+    networks:
+      - agentx-net
+
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U agentx -d agentx_db"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U agentx -d agentx_db"
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
+
+
+  # ============================================================
+  # REDIS
+  # ============================================================
 
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    volumes: [redis_data:/data]
-    ports: ["6379:6379"]
-    networks: [agentx-net]
+
+    volumes:
+      - redis_data:/data
+
+    ports:
+      - "6379:6379"
+
+    networks:
+      - agentx-net
+
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test:
+        [
+          "CMD",
+          "redis-cli",
+          "ping"
+        ]
       interval: 10s
       timeout: 3s
       retries: 5
 
+
+  # ============================================================
+  # OLLAMA
+  # ============================================================
+
   ollama:
     image: ollama/ollama:latest
     restart: unless-stopped
-    volumes: [ollama_data:/root/.ollama]
-    ports: ["11434:11434"]
-    networks: [agentx-net]
+
+    volumes:
+      - ollama_data:/root/.ollama
+
+    ports:
+      - "11434:11434"
+
+    networks:
+      - agentx-net
+
     healthcheck:
-      test: ["CMD-SHELL", "ollama list || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          "ollama list || exit 1"
+        ]
       interval: 15s
       timeout: 5s
       retries: 5
 
+
+  # ============================================================
+  # OLLAMA MODEL INITIALIZER
+  # ============================================================
+
   ollama-init:
     image: ollama/ollama:latest
+
     depends_on:
       ollama:
         condition: service_healthy
-    networks: [agentx-net]
-    volumes: [ollama_data:/root/.ollama]
-    entrypoint: ["sh", "-c", "pull_if_missing() { if OLLAMA_HOST=ollama:11434 ollama list | grep -q \"$1\"; then echo \"$1 already present, skipping pull\"; else echo \"Pulling $1 ...\"; OLLAMA_HOST=ollama:11434 ollama pull \"$1\"; fi; }; pull_if_missing qwen2.5-coder:3b && pull_if_missing llama-guard3:1b && pull_if_missing nomic-embed-text"]
+
+    networks:
+      - agentx-net
+
+    volumes:
+      - ollama_data:/root/.ollama
+
+    entrypoint:
+      - sh
+      - -c
+      - |
+        pull_if_missing() {
+          if OLLAMA_HOST=ollama:11434 ollama list | grep -q "$1"; then
+            echo "$1 already present, skipping pull"
+          else
+            echo "Pulling $1 ..."
+            OLLAMA_HOST=ollama:11434 ollama pull "$1"
+          fi
+        }
+
+        pull_if_missing qwen2.5-coder:3b &&
+        pull_if_missing llama-guard3:1b &&
+        pull_if_missing nomic-embed-text
+
     restart: "no"
+
+
+  # ============================================================
+  # PISTON CODE EXECUTION ENGINE
+  # ============================================================
 
   piston:
     image: ghcr.io/engineer-man/piston:latest
     restart: unless-stopped
+
     privileged: true
-    ports: ["2000:2000"]
-    networks: [agentx-net]
+
+    ports:
+      - "2000:2000"
+
+    networks:
+      - agentx-net
+
     volumes:
       - piston_packages:/piston/packages
+
     tmpfs:
       - /piston/jobs:exec,nosuid,size=512m
 
-  # Installs common educational runtimes once into the persistent Piston volume.
-  # HTML/CSS are validated by AGENTX without a language runtime.
+
+  # ============================================================
+  # PISTON RUNTIME INITIALIZER
+  # ============================================================
+
   piston-runtime-init:
     image: node:20-alpine
     restart: "no"
+
     depends_on:
-      piston: { condition: service_started }
-    networks: [agentx-net]
+      piston:
+        condition: service_started
+
+    networks:
+      - agentx-net
+
     volumes:
       - piston_packages:/piston/packages
+
     command: >-
-      sh -c "apk add --no-cache git >/dev/null &&
+      sh -c "
+      apk add --no-cache git >/dev/null &&
       git clone --depth 1 https://github.com/engineer-man/piston /tmp/piston >/dev/null 2>&1 &&
-      cd /tmp/piston/cli && npm ci --silent &&
+      cd /tmp/piston/cli &&
+      npm ci --silent &&
       node index.js -u http://piston:2000 ppman install python &&
       node index.js -u http://piston:2000 ppman install java &&
       node index.js -u http://piston:2000 ppman install javascript &&
@@ -99,41 +199,95 @@ services:
       node index.js -u http://piston:2000 ppman install go &&
       node index.js -u http://piston:2000 ppman install rust &&
       node index.js -u http://piston:2000 ppman install php &&
-      node index.js -u http://piston:2000 ppman install ruby"
+      node index.js -u http://piston:2000 ppman install ruby
+      "
+
+
+  # ============================================================
+  # CHROMADB
+  # ============================================================
 
   chromadb:
     image: chromadb/chroma:latest
     restart: unless-stopped
-    volumes: [chroma_data:/chroma/chroma]
-    ports: ["8001:8000"]
-    networks: [agentx-net]
+
+    volumes:
+      - chroma_data:/chroma/chroma
+
+    ports:
+      - "8001:8000"
+
+    networks:
+      - agentx-net
+
     healthcheck:
-      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/8000"]
+      test:
+        [
+          "CMD",
+          "bash",
+          "-c",
+          "echo > /dev/tcp/localhost/8000"
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
 
+
+  # ============================================================
+  # OPA POLICY ENGINE
+  # ============================================================
+
   opa:
     image: openpolicyagent/opa:latest-envoy
     restart: unless-stopped
-    command: ["run", "--server", "--addr=0.0.0.0:8181", "/policies"]
+
+    command:
+      [
+        "run",
+        "--server",
+        "--addr=0.0.0.0:8181",
+        "/policies"
+      ]
+
     volumes:
       - ./backend/governance/policies:/policies:ro
       - opa_data:/opa-data
-    ports: ["8181:8181"]
-    networks: [agentx-net]
+
+    ports:
+      - "8181:8181"
+
+    networks:
+      - agentx-net
+
     healthcheck:
-      test: ["CMD", "/opa", "eval", "--bundle", "/policies", "data"]
+      test:
+        [
+          "CMD",
+          "/opa",
+          "eval",
+          "--bundle",
+          "/policies",
+          "data"
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
+
+
+  # ============================================================
+  # BACKEND
+  # ============================================================
 
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile.backend
+
     restart: unless-stopped
-    env_file: .env
+
+    env_file:
+      - .env
+
     environment:
       DATABASE_URL: ${DATABASE_URL}
       REDIS_URL: redis://redis:6379
@@ -141,23 +295,55 @@ services:
       CHROMA_URL: http://chromadb:8000
       OPA_URL: http://opa:8181
       PISTON_URL: http://piston:2000
-    ports: ["8000:8000"]
-    networks: [agentx-net]
+
+    ports:
+      - "8000:8000"
+
+    networks:
+      - agentx-net
+
     depends_on:
-      postgres: { condition: service_healthy }
-      redis: { condition: service_healthy }
-      ollama: { condition: service_healthy }
-      chromadb: { condition: service_healthy }
-      opa: { condition: service_healthy }
-      piston: { condition: service_started }
+      postgres:
+        condition: service_healthy
+
+      redis:
+        condition: service_healthy
+
+      ollama:
+        condition: service_healthy
+
+      chromadb:
+        condition: service_healthy
+
+      opa:
+        condition: service_healthy
+
+      piston:
+        condition: service_started
+
+
+  # ============================================================
+  # CELERY
+  # ============================================================
 
   celery:
     build:
       context: ./backend
       dockerfile: Dockerfile.backend
+
     restart: unless-stopped
-    command: celery -A celery_worker worker --loglevel=info --concurrency=4
-    env_file: .env
+
+    command:
+      - celery
+      - -A
+      - celery_worker
+      - worker
+      - --loglevel=info
+      - --concurrency=4
+
+    env_file:
+      - .env
+
     environment:
       DATABASE_URL: ${DATABASE_URL}
       REDIS_URL: redis://redis:6379
@@ -165,37 +351,86 @@ services:
       CHROMA_URL: http://chromadb:8000
       OPA_URL: http://opa:8181
       PISTON_URL: http://piston:2000
-    networks: [agentx-net]
+
+    networks:
+      - agentx-net
+
     healthcheck:
-      test: ["CMD-SHELL", "celery -A celery_worker inspect ping -d celery@$$HOSTNAME || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          "celery -A celery_worker inspect ping -d celery@$$HOSTNAME || exit 1"
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
+
     depends_on:
-      postgres: { condition: service_healthy }
-      redis: { condition: service_healthy }
-      ollama: { condition: service_healthy }
-      piston: { condition: service_started }
+      postgres:
+        condition: service_healthy
+
+      redis:
+        condition: service_healthy
+
+      ollama:
+        condition: service_healthy
+
+      piston:
+        condition: service_started
+
+
+  # ============================================================
+  # FRONTEND
+  # ============================================================
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile.frontend
+
     restart: unless-stopped
+
     environment:
       VITE_API_URL: http://localhost:8000
       VITE_WS_URL: ws://localhost:8000
-    ports: ["3000:3000"]
-    networks: [agentx-net]
+
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+
+    ports:
+      - "3000:3000"
+
+    networks:
+      - agentx-net
+
+    depends_on:
+      backend:
+        condition: service_started
+
+
+  # ============================================================
+  # NGINX
+  # ============================================================
 
   nginx:
     image: nginx:alpine
     restart: unless-stopped
+
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - ./ssl:/etc/nginx/ssl:ro
-    ports: ["80:80", "443:443"]
-    networks: [agentx-net]
+
+    ports:
+      - "80:80"
+      - "443:443"
+
+    networks:
+      - agentx-net
+
     depends_on:
-      backend: { condition: service_healthy }
-      frontend: { condition: service_started }
+      backend:
+        condition: service_started
+
+      frontend:
+        condition: service_started

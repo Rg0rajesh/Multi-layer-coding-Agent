@@ -1,42 +1,66 @@
-# --- Web framework ---
+﻿# ============================================================
+# AGENTX BACKEND - PYTHON REQUIREMENTS
+# ============================================================
+
+# --- Web Framework ---
 fastapi>=0.111,<0.112
 uvicorn[standard]>=0.29
-python-multipart>=0.0.9        # form parsing, needed for a couple of OAuth callback shapes
-email-validator>=2.1           # pulled in by pydantic's EmailStr (auth/team schemas)
+python-multipart>=0.0.9
+email-validator>=2.1
 
-# --- Config / validation ---
+# --- Configuration / Validation ---
 pydantic>=2.6
 pydantic-settings>=2.2
 
 # --- Database ---
 sqlalchemy[asyncio]>=2.0
 asyncpg>=0.29
-alembic>=1.13                  # schema.sql bootstraps fresh DBs; alembic covers future migrations
+alembic>=1.13
 
-# --- Auth ---
+# --- Authentication / Security ---
 python-jose[cryptography]>=3.3
 passlib[bcrypt]>=1.7.4
 
-# --- Background jobs / cache / realtime ---
+# --- Background Jobs / Cache / Realtime ---
 celery>=5.3
 redis>=5.0
 
-# --- Agents / orchestration ---
+# --- Agents / Orchestration ---
 langgraph>=0.1.5
 autogen-agentchat>=0.2
 
-# --- Memory (C1) ---
+# --- HTTP Client ---
+httpx>=0.27
+
+# --- Ollama ---
+# Required by Mem0 when using Ollama embeddings
+ollama>=0.3
+
+# --- Memory ---
 chromadb>=0.5
 mem0ai>=0.1
 
-# --- Safety agents (C2) ---
+# --- Safety / Code Analysis ---
 bandit>=1.7
 pylint>=3.1
 semgrep>=1.66
 
-# --- HTTP client (Ollama, GitHub/Google OAuth, OPA) ---
-httpx>=0.27
-
 # --- Testing ---
 pytest>=8.1
 pytest-asyncio>=0.23
+
+# --- Environment / Utilities ---
+python-dotenv>=1.0
+
+# --- File / Document Processing ---
+pypdf>=4.0
+
+# --- GitHub Integration ---
+PyGithub>=2.3
+
+# --- Google OAuth / API ---
+google-auth>=2.29
+google-auth-oauthlib>=1.2
+
+# --- WebSocket Support ---
+websockets>=12.0
