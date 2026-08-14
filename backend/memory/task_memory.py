@@ -1,13 +1,3 @@
-﻿# backend/memory/task_memory.py
-"""
-Tier 1 — Task Memory (short-term).
-
-Scoped to a single task run: current file being edited, recent errors,
-test failures. Lives in one ChromaDB collection shared by every task, but
-every read/write and the final wipe are scoped by task_id via metadata
-filtering — there's no per-task collection, that'd be a lot of churn for
-Chroma to manage over a long-running server.
-"""
 from __future__ import annotations
 
 import asyncio
@@ -17,17 +7,15 @@ from typing import Any
 from urllib.parse import urlparse
 
 import chromadb
+import httpx
 
 from config import settings
 
 logger = logging.getLogger(__name__)
-
 _client: chromadb.HttpClient | None = None
 
 
 def get_chroma_client() -> chromadb.HttpClient:
-    """Shared across task_memory and project_memory — one connection pool,
-    not one per tier."""
     global _client
     if _client is None:
         parsed = urlparse(settings.chroma_url)
@@ -35,11 +23,21 @@ def get_chroma_client() -> chromadb.HttpClient:
     return _client
 
 
-class TaskMemory:
-    """Build one of these per task_id. Cheap to construct — the real cost is
-    the network calls, which all go through asyncio.to_thread since the
-    chromadb client is sync."""
+def embed_texts(texts: list[str]) -> list[list[float]]:
+    """Use Ollama directly; Chroma's Ollama wrapper was producing /api/embed/api/embed."""
+    url = f"{settings.ollama_url.rstrip('/')}/api/embed"
+    payload = {"model": "nomic-embed-text", "input": texts}
+    with httpx.Client(timeout=settings.ollama_timeout_seconds) as client:
+        response = client.post(url, json=payload)
+        response.raise_for_status()
+        data = response.json()
+    embeddings = data.get("embeddings")
+    if not embeddings:
+        raise RuntimeError("Ollama /api/embed returned no embeddings")
+    return embeddings
 
+
+class TaskMemory:
     COLLECTION_NAME = "task_memory"
 
     def __init__(self, task_id: str):
@@ -59,7 +57,8 @@ class TaskMemory:
         where = {"task_id": self.task_id} if kind is None else {"task_id": self.task_id, "kind": kind}
 
         def _query() -> dict:
-            return self._collection.query(query_texts=[query], n_results=n_results, where=where)
+            query_embedding = embed_texts([query])[0]
+            return self._collection.query(query_embeddings=[query_embedding], n_results=n_results, where=where)
 
         try:
             raw = await asyncio.to_thread(_query)
@@ -69,8 +68,6 @@ class TaskMemory:
         return _flatten(raw)
 
     async def clear(self) -> None:
-        """Called once the task finishes. Tier 1 is explicitly disposable —
-        anything worth keeping should already be in curated_memory by then."""
         try:
             await asyncio.to_thread(self._collection.delete, where={"task_id": self.task_id})
         except Exception:
@@ -80,17 +77,12 @@ class TaskMemory:
         doc_id = f"{self.task_id}:{kind}:{datetime.now(timezone.utc).timestamp()}"
 
         def _add() -> None:
-            self._collection.add(
-                ids=[doc_id],
-                documents=[content],
-                metadatas=[{"task_id": self.task_id, "kind": kind, **metadata}],
-            )
+            embedding = embed_texts([content])[0]
+            self._collection.add(ids=[doc_id], documents=[content], embeddings=[embedding], metadatas=[{"task_id": self.task_id, "kind": kind, **metadata}])
 
         try:
             await asyncio.to_thread(_add)
         except Exception:
-            # Memory is an enhancement, not a hard dependency — a Chroma
-            # hiccup shouldn't take down the Coder/Tester loop.
             logger.warning("Failed to write task memory (%s) for %s", kind, self.task_id, exc_info=True)
 
 
