@@ -94,6 +94,21 @@ async def coder_node(state: WorkflowState) -> dict:
             raw_response=str(new_files),
         )
 
+    # Do not silently continue to Tester when the approved plan could not be
+    # fully implemented. A partial write can make the test result misleading.
+    if denied_files:
+        await emit_log(
+            task_id,
+            "CODER",
+            "ERROR",
+            "✗",
+            f"Implementation incomplete — {len(denied_files)} requested file(s) were outside the approved scope",
+        )
+        raise LLMGenerationError(
+            "Coder attempted files outside the approved Identity Broker scope",
+            raw_response=str(denied_files),
+        )
+
     code_files = {**state.get("code_files", {}), **accepted_files}
     total_lines = sum(content.count("\n") + 1 for content in code_files.values())
 
