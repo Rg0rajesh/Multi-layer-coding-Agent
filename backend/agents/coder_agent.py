@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import logging
 
+from sqlalchemy import select
+
 from governance.opa_client import log_tool_call
 from memory.memory_manager import MemoryManager
 from services.llm_service import LLMGenerationError, generate_json
@@ -83,12 +85,8 @@ async def coder_node(state: WorkflowState) -> dict:
 
 async def _persist_code_file(task_id: str, language: str | None, file_path: str, content: str) -> None:
     async with async_session_factory() as db:
-        existing = await db.execute(
-            __import__("sqlalchemy", fromlist=["select"]).select(CodeOutput).where(
-                CodeOutput.task_id == task_id, CodeOutput.file_path == file_path
-            )
-        )
-        row = existing.scalar_one_or_none()
+        result = await db.execute(select(CodeOutput).where(CodeOutput.task_id == task_id, CodeOutput.file_path == file_path))
+        row = result.scalar_one_or_none()
         if row:
             row.content = content
             row.language = language
