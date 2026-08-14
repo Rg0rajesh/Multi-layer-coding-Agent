@@ -1,4 +1,4 @@
-﻿// frontend/src/pages/Login.tsx
+// frontend/src/pages/Login.tsx
 /**
  * Auth gateway — one page, two modes. Matches Frontend Spec page 02:
  * split layout on desktop (log-stream panel + form), single column on
@@ -41,9 +41,6 @@ const EMPTY_FORM: FormState = {
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-// Mirrors the log-line format from the spec appendix (agent · mark · level
-// · message). Purely decorative here — just gives the left panel something
-// true-to-the-product to type out instead of lorem ipsum.
 const DEMO_LOG_LINES = [
   "SYSTEM · INIT   Pipeline initialised. 4 agents standing by.",
   "PLANNER ✦ TASK  Received: Build JWT auth API in TypeScript",
@@ -61,9 +58,6 @@ const STRENGTH_LABELS: Record<StrengthLabel, string> = {
   "very-strong": "Very Strong",
 };
 
-/** 0-4 segments filled, based on length + character variety. Not trying to
- * be a real entropy calculator — just enough signal to nudge people toward
- * a longer, mixed-character password. */
 function getPasswordStrength(password: string): { score: number; label: StrengthLabel } {
   let score = 0;
   if (password.length >= 8) score += 1;
@@ -89,8 +83,6 @@ export default function Login() {
 
   function updateField<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
-    // Clear that field's error the moment someone starts fixing it — waiting
-    // for the next submit to clear a stale error message feels broken.
     setErrors((prev) => ({ ...prev, [key]: undefined, form: undefined }));
   }
 
@@ -143,8 +135,6 @@ export default function Login() {
       }
       navigate("/dashboard");
     } catch (err) {
-      // useAuth already turns ApiError into a readable message — just
-      // surface it. A generic fallback covers anything that isn't.
       setErrors({ form: err instanceof Error ? err.message : "Something went wrong — try again" });
     } finally {
       setIsSubmitting(false);
@@ -156,7 +146,6 @@ export default function Login() {
       provider === "github" ? import.meta.env.VITE_GITHUB_CLIENT_ID : import.meta.env.VITE_GOOGLE_CLIENT_ID;
 
     if (!clientId) {
-      // Fails loud in dev instead of redirecting to a 404 with no client_id.
       setErrors({ form: `${provider === "github" ? "GitHub" : "Google"} sign-in isn't configured yet` });
       return;
     }
@@ -314,12 +303,6 @@ export default function Login() {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Small local building blocks. Only used on this page right now — worth
-// splitting into their own files once a second form needs Field or the
-// strength meter.
-// ---------------------------------------------------------------------------
-
 function Field({
   label,
   error,
@@ -376,8 +359,6 @@ function GitHubIcon() {
   );
 }
 
-// Monochrome abstract mark — the spec is a strict black & white edition,
-// so a full-color Google "G" would be the one colored thing on the page.
 function GoogleIcon() {
   return (
     <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.4">

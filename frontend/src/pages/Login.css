@@ -39,8 +39,6 @@
   --fill-text: #0a0a0a;
 }
 
-/* ---------------------------------------------------------------- panel */
-
 .auth-panel {
   display: flex;
   flex-direction: column;
@@ -90,8 +88,6 @@
   animation: blink 1s step-end infinite;
 }
 
-/* ------------------------------------------------------------- form side */
-
 .auth-form-wrap {
   display: flex;
   align-items: center;
@@ -136,8 +132,6 @@
   color: var(--text);
   font-weight: 600;
 }
-
-/* ------------------------------------------------------------- fields */
 
 .auth-field {
   display: block;
@@ -196,8 +190,6 @@
   font-weight: 700;
 }
 
-/* ------------------------------------------------------------ password */
-
 .strength-meter {
   display: flex;
   align-items: center;
@@ -251,8 +243,6 @@
   font-weight: 600;
 }
 
-/* --------------------------------------------------------------- submit */
-
 .auth-submit {
   position: relative;
   display: flex;
@@ -290,8 +280,6 @@
   transform-origin: center;
   animation: spin 0.8s linear infinite;
 }
-
-/* --------------------------------------------------------------- oauth */
 
 .auth-divider {
   display: flex;
@@ -336,47 +324,26 @@
   background: color-mix(in srgb, var(--text) 6%, transparent);
 }
 
-/* ------------------------------------------------------------ animation */
-
 @keyframes slideInRight {
-  from {
-    opacity: 0;
-    transform: translateX(24px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
+  from { opacity: 0; transform: translateX(24px); }
+  to { opacity: 1; transform: translateX(0); }
 }
 
 @keyframes blink {
-  50% {
-    opacity: 0;
-  }
+  50% { opacity: 0; }
 }
 
 @keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
+  to { transform: rotate(360deg); }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .auth-form,
-  .auth-panel__cursor,
-  .spinner circle {
+  .auth-form, .auth-panel__cursor, .spinner circle {
     animation: none;
   }
 }
 
-/* ------------------------------------------------------------- mobile */
-
 @media (max-width: 900px) {
-  .auth-page {
-    grid-template-columns: 1fr;
-  }
-
-  .auth-panel {
-    display: none;
-  }
+  .auth-page { grid-template-columns: 1fr; }
+  .auth-panel { display: none; }
 }
