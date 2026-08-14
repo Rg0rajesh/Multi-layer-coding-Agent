@@ -54,10 +54,6 @@ services:
       timeout: 5s
       retries: 5
 
-  # Pulls models only if they are not already present in the ollama_data
-  # volume. `ollama list` queries the running ollama server — if the model
-  # name appears in the output, the pull is skipped entirely so restarting
-  # the stack never re-downloads gigabytes of weights.
   ollama-init:
     image: ollama/ollama:latest
     depends_on:
@@ -65,19 +61,19 @@ services:
         condition: service_healthy
     networks: [agentx-net]
     volumes: [ollama_data:/root/.ollama]
-    entrypoint: ["sh", "-c", "
-      pull_if_missing() {
-        if OLLAMA_HOST=ollama:11434 ollama list | grep -q \"$1\"; then
-          echo \"$1 already present, skipping pull\";
-        else
-          echo \"Pulling $1 ...\";
-          OLLAMA_HOST=ollama:11434 ollama pull \"$1\";
-        fi
-      };
-      pull_if_missing qwen2.5-coder:3b &&
-      pull_if_missing llama-guard3:1b &&
-      pull_if_missing nomic-embed-text"]
+    entrypoint: ["sh", "-c", "pull_if_missing() { if OLLAMA_HOST=ollama:11434 ollama list | grep -q \"$1\"; then echo \"$1 already present, skipping pull\"; else echo \"Pulling $1 ...\"; OLLAMA_HOST=ollama:11434 ollama pull \"$1\"; fi; }; pull_if_missing qwen2.5-coder:3b && pull_if_missing llama-guard3:1b && pull_if_missing nomic-embed-text"]
     restart: "no"
+
+  # Isolated multi-language execution service. Piston uses Linux isolation,
+  # resource limits and disabled outbound network access for submitted code.
+  piston:
+    image: ghcr.io/engineer-man/piston:latest
+    restart: unless-stopped
+    privileged: true
+    ports: ["2000:2000"]
+    networks: [agentx-net]
+    tmpfs:
+      - /piston/jobs:exec,nosuid,size=512m
 
   chromadb:
     image: chromadb/chroma:latest
@@ -91,9 +87,6 @@ services:
       timeout: 5s
       retries: 5
 
-  # Identity Broker (C7) evaluates every scoped-credential request against
-  # this. Runs the bundled Rego policy directly off disk — no bundle
-  # server needed at this scale, just point it at the folder.
   opa:
     image: openpolicyagent/opa:latest-envoy
     restart: unless-stopped
@@ -121,6 +114,7 @@ services:
       OLLAMA_URL: http://ollama:11434
       CHROMA_URL: http://chromadb:8000
       OPA_URL: http://opa:8181
+      PISTON_URL: http://piston:2000
     ports: ["8000:8000"]
     networks: [agentx-net]
     depends_on:
@@ -129,6 +123,7 @@ services:
       ollama: { condition: service_healthy }
       chromadb: { condition: service_healthy }
       opa: { condition: service_healthy }
+      piston: { condition: service_started }
 
   celery:
     build:
@@ -143,6 +138,7 @@ services:
       OLLAMA_URL: http://ollama:11434
       CHROMA_URL: http://chromadb:8000
       OPA_URL: http://opa:8181
+      PISTON_URL: http://piston:2000
     networks: [agentx-net]
     healthcheck:
       test: ["CMD-SHELL", "celery -A celery_worker inspect ping -d celery@$$HOSTNAME || exit 1"]
@@ -153,6 +149,7 @@ services:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
       ollama: { condition: service_healthy }
+      piston: { condition: service_started }
 
   frontend:
     build:
