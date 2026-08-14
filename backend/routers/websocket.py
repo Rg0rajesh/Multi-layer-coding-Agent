@@ -75,7 +75,17 @@ async def task_stream(websocket: WebSocket, task_id: str):
     await websocket.accept()
 
     if not await _authenticate_task(websocket, task_id):
-        await websocket.close(code=1008, reason="Unauthorized task stream")
+        # The browser/client may have already disconnected while the server
+        # was validating the token. In that case Starlette raises
+        # WebSocketDisconnect(code=1006) when close() tries to send a close
+        # frame. Treat it as a normal disconnected client instead of logging
+        # an application traceback.
+        try:
+            await websocket.close(code=1008, reason="Unauthorized task stream")
+        except WebSocketDisconnect:
+            logger.debug("Client disconnected before unauthorized WebSocket close for task %s", task_id)
+        except RuntimeError:
+            logger.debug("WebSocket already closed for task %s", task_id)
         return
 
     pubsub = _get_redis().pubsub()
@@ -98,7 +108,10 @@ async def _forward_redis_to_client(pubsub: redis.client.PubSub, websocket: WebSo
             continue
         try:
             await websocket.send_text(message["data"])
+        except (WebSocketDisconnect, RuntimeError):
+            return
         except Exception:
+            logger.debug("WebSocket client unavailable while forwarding task event", exc_info=True)
             return
 
 
@@ -107,4 +120,6 @@ async def _wait_for_disconnect(websocket: WebSocket) -> None:
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
+        return
+    except RuntimeError:
         return
