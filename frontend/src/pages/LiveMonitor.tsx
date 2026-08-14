@@ -1,7 +1,7 @@
 // frontend/src/pages/LiveMonitor.tsx
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Sidebar, AgentPanel, LogStream, HumanApprovalPanel } from "../components";
+import { Sidebar, AgentPanel, LogStream, HumanApprovalPanel, LiveCodePanel } from "../components";
 import { useAgentStream } from "../hooks/useAgentStream";
 import { agentsApi, tasksApi } from "../api";
 import type { AgentRun, RiskScore, Task } from "../types";
@@ -13,9 +13,7 @@ const GROUPS: { label: string; agents: string[] }[] = [
   { label: "Quality", agents: ["SECURITY", "REVIEWER", "CONTEXT_CURATOR"] },
 ];
 
-function placeholderRun(agentName: string): AgentRun {
-  return { id: agentName, agent_name: agentName, agent_color: null, status: "pending", current_subtask: null, step_current: 0, step_total: 0, started_at: null, completed_at: null, duration_ms: null };
-}
+function placeholderRun(agentName: string): AgentRun { return { id: agentName, agent_name: agentName, agent_color: null, status: "pending", current_subtask: null, step_current: 0, step_total: 0, started_at: null, completed_at: null, duration_ms: null }; }
 
 export default function LiveMonitor() {
   const [params] = useSearchParams();
@@ -29,10 +27,14 @@ export default function LiveMonitor() {
   useEffect(() => {
     if (!taskId) return;
     let cancelled = false;
-    tasksApi.get(taskId).then((t) => !cancelled && setTask(t)).catch(() => {});
-    agentsApi.runs(taskId).then((list) => { if (!cancelled) setRuns(Object.fromEntries(list.map((r) => [r.agent_name, r]))); }).catch(() => {});
-    agentsApi.riskScore(taskId).then((r) => !cancelled && setRisk(r)).catch(() => {});
-    return () => { cancelled = true; };
+    const refresh = () => {
+      tasksApi.get(taskId).then((t) => !cancelled && setTask(t)).catch(() => {});
+      agentsApi.runs(taskId).then((list) => { if (!cancelled) setRuns(Object.fromEntries(list.map((r) => [r.agent_name, r]))); }).catch(() => {});
+      agentsApi.riskScore(taskId).then((r) => !cancelled && setRisk(r)).catch(() => {});
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 3000);
+    return () => { cancelled = true; window.clearInterval(timer); };
   }, [taskId]);
 
   useEffect(() => {
@@ -53,34 +55,21 @@ export default function LiveMonitor() {
     return merged;
   }, [runs, lines]);
 
-  if (!taskId) {
-    return <div className="app-shell"><Sidebar /><main className="app-main"><div className="empty-state"><h3>No task selected</h3><p>Open a task from the Dashboard or History page to watch it live.</p></div></main></div>;
-  }
+  if (!taskId) return <div className="app-shell"><Sidebar /><main className="app-main"><div className="empty-state"><h3>No task selected</h3><p>Open a task from the Dashboard or History page to watch it live.</p></div></main></div>;
 
   return (
     <div className="app-shell">
       <Sidebar />
       <main className="app-main">
         <div className="page-header">
-          <div>
-            <h1>{task?.title ?? "Live Monitor"}</h1>
-            <p className="page-header__meta">{connectionStatus === "open" ? "Connected — streaming live" : `Connection: ${connectionStatus}`}</p>
-          </div>
+          <div><h1>{task?.title ?? "Live Monitor"}</h1><p className="page-header__meta">{connectionStatus === "open" ? "Connected — streaming live" : `Connection: ${connectionStatus} — task continues in background`}</p></div>
           {risk && <span className={`live-monitor__risk live-monitor__risk--${risk.last_verdict}`}>Guardrail: {risk.running_score.toFixed(0)}/100 ({risk.last_verdict})</span>}
         </div>
-
         {humanWaiting && <HumanApprovalPanel taskId={taskId} />}
-
+        <LiveCodePanel taskId={taskId} />
         <div className="live-monitor__layout">
           <div className="live-monitor__groups">
-            {GROUPS.map((group) => (
-              <section key={group.label} className="live-monitor__group">
-                <h2 className="live-monitor__group-title">{group.label}</h2>
-                <div className="live-monitor__grid">
-                  {group.agents.map((agentName) => <AgentPanel key={agentName} run={mergedRuns[agentName] ?? placeholderRun(agentName)} />)}
-                </div>
-              </section>
-            ))}
+            {GROUPS.map((group) => <section key={group.label} className="live-monitor__group"><h2 className="live-monitor__group-title">{group.label}</h2><div className="live-monitor__grid">{group.agents.map((agentName) => <AgentPanel key={agentName} run={mergedRuns[agentName] ?? placeholderRun(agentName)} />)}</div></section>)}
           </div>
           <div className="live-monitor__log"><LogStream lines={lines} /></div>
         </div>
