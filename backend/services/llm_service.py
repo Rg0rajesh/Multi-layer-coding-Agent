@@ -58,6 +58,31 @@ async def close_client() -> None:
         _client = None
 
 
+async def ensure_model_ready(model: str) -> None:
+    """Check that Ollama is reachable and the requested model is available.
+
+    This is intentionally a lightweight startup check. It does not generate
+    tokens or pull a model automatically, so application startup remains fast
+    and predictable. A failure is raised for the lifespan handler to log; the
+    normal request path will retry Ollama when it is actually needed.
+    """
+    client = _get_client()
+    try:
+        response = await client.post("/api/show", json={"name": model})
+        if response.status_code == 404:
+            raise OllamaUnavailableError(
+                f"Ollama model '{model}' is not installed. Pull it with: ollama pull {model}"
+            )
+        response.raise_for_status()
+        logger.info("Ollama model ready: %s", model)
+    except (httpx.ConnectError, httpx.TimeoutException) as exc:
+        raise OllamaUnavailableError(f"Ollama is unreachable at {settings.ollama_url}") from exc
+    except httpx.HTTPStatusError as exc:
+        raise OllamaUnavailableError(
+            f"Ollama model check failed for '{model}': HTTP {exc.response.status_code}"
+        ) from exc
+
+
 _MAX_CONNECTION_RETRIES = 2
 _RETRY_BACKOFF_SECONDS = 1.5
 _MAX_JSON_ATTEMPTS = 3
@@ -209,11 +234,6 @@ async def generate_json(
     raise last_error
 
 
-# These phrases identify ordinary application-development requests. They are
-# used only as a conservative false-positive guard before the safety model.
-# A task must contain development intent and must not contain any of the
-# explicitly high-risk indicators below. This does NOT authorize tool use;
-# OPA/Identity Broker still controls every filesystem/tool operation later.
 _DEV_INTENT = re.compile(
     r"\b(build|create|implement|develop|add|fix|refactor|update|test|debug|write|modify)\b"
     r".*\b(app|application|frontend|backend|component|page|api|calculator|website|feature|test|code|ui|typescript|javascript|python|react)\b",
