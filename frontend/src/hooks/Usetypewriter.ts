@@ -19,9 +19,8 @@ interface UseTypewriterResult {
 
 /**
  * Types out a list of strings one character at a time, like a terminal log
- * stream. Pulled into its own hook because the Login page and (eventually)
- * Live Monitor both want the same "typewriter log" effect, and the previous
- * version had this logic copy-pasted inline.
+ * stream. Pulled into its own hook because the Login page and Live Monitor
+ * both want the same "typewriter log" effect.
  *
  * `lines` should be a stable reference — module-level constant or memoized
  * array. Passing a new array literal on every render restarts the effect
@@ -51,8 +50,6 @@ export function useTypewriter(lines: string[], options: UseTypewriterOptions = {
         return;
       }
 
-      // Line's fully typed — hold it a beat, then either move to the next
-      // line or wrap back to the start if looping.
       timeoutId = setTimeout(() => {
         const next = lineIndex.current + 1;
 
